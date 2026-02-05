@@ -122,8 +122,31 @@ final class Maxima_Product_Importer {
 			$this->redirect_back( $store_id );
 		}
 
-		$this->log_debug( sprintf( 'Cantidad de productos recibidos: %d', count( $products ) ) );
-		$this->log_debug( sprintf( 'Importando %d productos para tienda %d.', count( $products ), $store_id ) );
+		$products_count = is_array( $products ) ? count( $products ) : 0;
+		$this->log_debug( sprintf( 'Cantidad de productos recibidos: %d', $products_count ) );
+
+		if ( 0 === $products_count ) {
+			$message = __( 'La API respondió, pero no se detectaron productos', 'maxima-integrations' );
+			$this->log_debug( $message );
+			$this->store_notice(
+				array(
+					'errors'              => array( $message ),
+					'error_notice'        => $message,
+					'debug_products_count' => $products_count,
+					'store_id'            => $store_id,
+				)
+			);
+			$this->redirect_back( $store_id );
+		}
+
+		$first_product = reset( $products );
+		if ( is_array( $first_product ) && isset( $first_product['id'] ) ) {
+			$this->log_debug( sprintf( 'ID externo del primer producto: %s', (string) $first_product['id'] ) );
+		} else {
+			$this->log_debug( 'No se pudo determinar el ID externo del primer producto.' );
+		}
+
+		$this->log_debug( sprintf( 'Importando %d productos para tienda %d.', $products_count, $store_id ) );
 		$result = $this->import_products_list( $store_id, $products );
 		if ( is_wp_error( $result ) ) {
 			$this->log_debug( $result->get_error_message() );
@@ -137,6 +160,7 @@ final class Maxima_Product_Importer {
 		}
 
 		$this->log_debug( sprintf( 'Importación completada para tienda %d. Resultado: %s', $store_id, wp_json_encode( $result ) ) );
+		$result['debug_products_count'] = $products_count;
 		$this->store_notice( $result );
 		$this->redirect_back( $store_id );
 	}
@@ -160,8 +184,16 @@ final class Maxima_Product_Importer {
 		$error_count = isset( $notice['errors_count'] ) ? (int) $notice['errors_count'] : count( $errors );
 		$imported = isset( $notice['imported'] ) ? (int) $notice['imported'] : 0;
 		$skipped  = isset( $notice['skipped'] ) ? (int) $notice['skipped'] : 0;
+		$error_notice = isset( $notice['error_notice'] ) ? (string) $notice['error_notice'] : '';
+		$debug_products_count = isset( $notice['debug_products_count'] ) ? (int) $notice['debug_products_count'] : null;
 
-		if ( 0 === $imported && 0 === $skipped && 0 === $error_count ) {
+		if ( $error_notice ) {
+			?>
+			<div class="notice notice-error is-dismissible">
+				<p><?php echo esc_html( $error_notice ); ?></p>
+			</div>
+			<?php
+		} elseif ( 0 === $imported && 0 === $skipped && 0 === $error_count ) {
 			?>
 			<div class="notice notice-warning is-dismissible">
 				<p><?php esc_html_e( 'No se importaron productos.', 'maxima-integrations' ); ?></p>
@@ -198,6 +230,14 @@ final class Maxima_Product_Importer {
 				</div>
 				<?php
 			}
+		}
+
+		if ( defined( 'WP_DEBUG' ) && WP_DEBUG && null !== $debug_products_count ) {
+			?>
+			<div class="notice notice-info is-dismissible">
+				<p><?php echo esc_html( sprintf( __( 'Productos detectados: %d', 'maxima-integrations' ), $debug_products_count ) ); ?></p>
+			</div>
+			<?php
 		}
 	}
 
@@ -255,6 +295,8 @@ final class Maxima_Product_Importer {
 			)
 		);
 
+		$this->log_debug( sprintf( 'URL final llamada: %s', $endpoint_url ) );
+
 		if ( is_wp_error( $response ) ) {
 			return new WP_Error(
 				'maxima_api_unreachable',
@@ -266,6 +308,7 @@ final class Maxima_Product_Importer {
 		}
 
 		$status_code = wp_remote_retrieve_response_code( $response );
+		$this->log_debug( sprintf( 'HTTP status code: %d', (int) $status_code ) );
 		if ( $status_code < 200 || $status_code >= 300 ) {
 			return new WP_Error(
 				'maxima_api_http_error',
@@ -277,6 +320,7 @@ final class Maxima_Product_Importer {
 		}
 
 		$body = wp_remote_retrieve_body( $response );
+		$this->log_debug( sprintf( 'Raw body de la respuesta: %s', $body ) );
 		if ( '' === $body ) {
 			return new WP_Error( 'maxima_api_empty_response', __( 'La API externa devolvió una respuesta vacía.', 'maxima-integrations' ) );
 		}
@@ -300,6 +344,8 @@ final class Maxima_Product_Importer {
 			$response = $response['data'];
 		} elseif ( isset( $response['items'] ) && is_array( $response['items'] ) ) {
 			$response = $response['items'];
+		} elseif ( isset( $response['products'] ) && is_array( $response['products'] ) ) {
+			$response = $response['products'];
 		}
 
 		if ( ! is_array( $response ) ) {
@@ -409,6 +455,8 @@ final class Maxima_Product_Importer {
 			$product->set_description( $description );
 			$product->set_short_description( $short_desc );
 			$product->update_meta_data( '_maxima_is_external', true );
+			$product->update_meta_data( '_maxima_external_id', $external_id );
+			$product->update_meta_data( '_maxima_store_id', (int) $store_id );
 			$product->update_meta_data( '_maxima_external_store_id', (int) $store_id );
 			$product->update_meta_data( '_maxima_external_product_id', $external_id );
 			$product->save();
@@ -427,6 +475,8 @@ final class Maxima_Product_Importer {
 		$product->set_short_description( $short_desc );
 		$product->set_status( 'publish' );
 		$product->update_meta_data( '_maxima_is_external', true );
+		$product->update_meta_data( '_maxima_external_id', $external_id );
+		$product->update_meta_data( '_maxima_store_id', (int) $store_id );
 		$product->update_meta_data( '_maxima_external_store_id', (int) $store_id );
 		$product->update_meta_data( '_maxima_external_product_id', $external_id );
 
@@ -454,11 +504,13 @@ final class Maxima_Product_Importer {
 		}
 
 		$defaults = array(
-			'errors'   => array(),
-			'imported' => 0,
-			'skipped'  => 0,
-			'store_id' => 0,
-			'timestamp' => current_time( 'timestamp' ),
+			'errors'               => array(),
+			'imported'             => 0,
+			'skipped'              => 0,
+			'store_id'             => 0,
+			'error_notice'         => '',
+			'debug_products_count' => null,
+			'timestamp'            => current_time( 'timestamp' ),
 		);
 
 		$notice = wp_parse_args( $data, $defaults );
