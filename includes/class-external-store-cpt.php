@@ -45,7 +45,7 @@ final class Maxima_External_Store_CPT {
 			'labels'             => $labels,
 			'public'             => false,
 			'show_ui'            => true,
-			'show_in_menu'       => true,
+			'show_in_menu'       => 'maxima-integrations',
 			'exclude_from_search'=> true,
 			'publicly_queryable' => false,
 			'has_archive'        => false,
@@ -53,7 +53,8 @@ final class Maxima_External_Store_CPT {
 			'query_var'          => false,
 			'show_in_rest'       => false,
 			'supports'           => array( 'title', 'editor' ),
-			'capability_type'    => 'post',
+			'capability_type'    => array( 'maxima_store', 'maxima_stores' ),
+			'map_meta_cap'       => true,
 		);
 
 		register_post_type( 'external_store', $args );
