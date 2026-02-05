@@ -25,10 +25,11 @@ final class Maxima_External_Store_Admin {
 	 * Registra menú principal y pantalla de tiendas.
 	 */
 	public function register_menu() {
+		$capability = $this->get_manage_capability();
 		add_menu_page(
 			__( 'Máxima', 'maxima-integrations' ),
 			__( 'Máxima', 'maxima-integrations' ),
-			'manage_options',
+			$capability,
 			'maxima',
 			array( $this, 'render_page' ),
 			'dashicons-store'
@@ -38,7 +39,7 @@ final class Maxima_External_Store_Admin {
 			'maxima',
 			__( 'Tiendas', 'maxima-integrations' ),
 			__( 'Tiendas', 'maxima-integrations' ),
-			'manage_options',
+			$capability,
 			'maxima_tiendas',
 			array( $this, 'render_page' )
 		);
@@ -78,7 +79,7 @@ final class Maxima_External_Store_Admin {
 	 * Renderiza la pantalla de tiendas externas.
 	 */
 	public function render_page() {
-		if ( ! current_user_can( 'manage_options' ) ) {
+		if ( ! $this->current_user_can_manage() ) {
 			wp_die( esc_html__( 'No autorizado.', 'maxima-integrations' ) );
 		}
 
@@ -305,7 +306,7 @@ final class Maxima_External_Store_Admin {
 	 * Maneja el guardado de la tienda.
 	 */
 	public function handle_save_store() {
-		if ( ! current_user_can( 'manage_options' ) ) {
+		if ( ! $this->current_user_can_manage() ) {
 			$this->store_notice( array( 'type' => 'error', 'message' => __( 'No autorizado.', 'maxima-integrations' ) ) );
 			$this->redirect_back( 0 );
 		}
@@ -394,7 +395,7 @@ final class Maxima_External_Store_Admin {
 	 * Maneja la eliminación de la tienda.
 	 */
 	public function handle_delete_store() {
-		if ( ! current_user_can( 'manage_options' ) ) {
+		if ( ! $this->current_user_can_manage() ) {
 			$this->store_notice( array( 'type' => 'error', 'message' => __( 'No autorizado.', 'maxima-integrations' ) ) );
 			$this->redirect_back( 0 );
 		}
@@ -513,5 +514,27 @@ final class Maxima_External_Store_Admin {
 
 		wp_safe_redirect( $location );
 		exit;
+	}
+
+	/**
+	 * Obtiene la capability para gestionar tiendas.
+	 *
+	 * @return string
+	 */
+	private function get_manage_capability() {
+		return class_exists( 'WooCommerce' ) ? 'manage_woocommerce' : 'manage_options';
+	}
+
+	/**
+	 * Verifica si el usuario actual puede gestionar tiendas.
+	 *
+	 * @return bool
+	 */
+	private function current_user_can_manage() {
+		if ( current_user_can( 'manage_options' ) ) {
+			return true;
+		}
+
+		return current_user_can( $this->get_manage_capability() ) || current_user_can( 'edit_products' );
 	}
 }
