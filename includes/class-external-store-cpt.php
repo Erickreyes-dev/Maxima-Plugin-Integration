@@ -53,7 +53,7 @@ final class Maxima_External_Store_CPT {
 			'query_var'          => false,
 			'show_in_rest'       => false,
 			'supports'           => array( 'title', 'editor' ),
-			'capability_type'    => array( 'maxima_store', 'maxima_stores' ),
+			'capability_type'    => 'post',
 			'map_meta_cap'       => true,
 		);
 
