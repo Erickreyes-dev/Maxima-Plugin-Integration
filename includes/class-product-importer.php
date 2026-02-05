@@ -18,13 +18,6 @@ final class Maxima_Product_Importer {
 	private $api_client;
 
 	/**
-	 * Tamaño por lote.
-	 *
-	 * @var int
-	 */
-	private $batch_size = 20;
-
-	/**
 	 * Constructor.
 	 *
 	 * @param Maxima_External_API_Client $api_client Cliente API.
@@ -32,188 +25,222 @@ final class Maxima_Product_Importer {
 	public function __construct( Maxima_External_API_Client $api_client ) {
 		$this->api_client = $api_client;
 
-		add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_assets' ) );
-		add_action( 'wp_ajax_maxima_import_products', array( $this, 'handle_ajax_import' ) );
+		add_action( 'admin_post_maxima_import_products', array( $this, 'handle_import_request' ) );
+		add_action( 'admin_notices', array( $this, 'render_admin_notices' ) );
 	}
 
 	/**
-	 * Encola assets para el admin del CPT.
-	 *
-	 * @param string $hook Hook actual.
+	 * Maneja la importación server-side.
 	 */
-	public function enqueue_assets( $hook ) {
-		if ( 'post.php' !== $hook && 'post-new.php' !== $hook ) {
-			return;
-		}
-
-		$screen = get_current_screen();
-		if ( ! $screen || 'external_store' !== $screen->post_type ) {
-			return;
-		}
-
-		wp_register_script(
-			'maxima-product-importer',
-			'',
-			array( 'jquery' ),
-			Maxima_Integrations::VERSION,
-			true
-		);
-		wp_enqueue_script( 'maxima-product-importer' );
-		wp_localize_script(
-			'maxima-product-importer',
-			'maximaImporter',
-			array(
-				'ajaxUrl'   => admin_url( 'admin-ajax.php' ),
-				'nonce'     => wp_create_nonce( 'maxima_import_products' ),
-				'batchSize' => $this->batch_size,
-				'strings'   => array(
-					'importing' => __( 'Importando productos...', 'maxima-integrations' ),
-					'complete'  => __( 'Importación completa.', 'maxima-integrations' ),
-					'error'     => __( 'Error en la importación.', 'maxima-integrations' ),
-				),
-			)
-		);
-
-		wp_add_inline_script(
-			'maxima-product-importer',
-			"(function($){
-				var isRunning = false;
-				function renderResults($box, data, done){
-					var html = '';
-					if (data.errors && data.errors.length) {
-						html += '<p><strong>" . esc_js( __( 'Errores:', 'maxima-integrations' ) ) . "</strong></p><ul>';
-						$.each(data.errors, function(i, error){
-							html += '<li>' + error + '</li>';
-						});
-						html += '</ul>';
-					}
-					html += '<p>' + '" . esc_js( __( 'Importados:', 'maxima-integrations' ) ) . " ' + data.imported + '</p>';
-					html += '<p>' + '" . esc_js( __( 'Actualizados:', 'maxima-integrations' ) ) . " ' + data.updated + '</p>';
-					html += '<p>' + '" . esc_js( __( 'Omitidos:', 'maxima-integrations' ) ) . " ' + data.skipped + '</p>';
-					if (done) {
-						html += '<p><strong>' + maximaImporter.strings.complete + '</strong></p>';
-					}
-					$box.html(html);
-				}
-				function importBatch(storeId, offset, totals, $box, $button){
-					$.post(maximaImporter.ajaxUrl, {
-						action: 'maxima_import_products',
-						nonce: maximaImporter.nonce,
-						store_id: storeId,
-						offset: offset,
-						limit: maximaImporter.batchSize
-					}).done(function(response){
-						if (!response || !response.success) {
-							$box.html('<p>' + maximaImporter.strings.error + '</p>');
-							isRunning = false;
-							$button.prop('disabled', false);
-							return;
-						}
-						var data = response.data;
-						totals.imported += data.imported;
-						totals.updated += data.updated;
-						totals.skipped += data.skipped;
-						totals.errors = totals.errors.concat(data.errors || []);
-						renderResults($box, totals, !data.has_more);
-						if (data.has_more) {
-							importBatch(storeId, data.next_offset, totals, $box, $button);
-						} else {
-							isRunning = false;
-							$button.prop('disabled', false);
-						}
-					}).fail(function(){
-						$box.html('<p>' + maximaImporter.strings.error + '</p>');
-						isRunning = false;
-						$button.prop('disabled', false);
-					});
-				}
-				$(document).on('click', '#maxima-import-products-button', function(e){
-					e.preventDefault();
-					if (isRunning) {
-						return;
-					}
-					isRunning = true;
-					var $button = $(this);
-					var storeId = $button.data('store-id');
-					var $box = $('#maxima-import-products-results');
-					$box.show().html('<p>' + maximaImporter.strings.importing + '</p>');
-					$button.prop('disabled', true);
-					importBatch(storeId, 0, {imported:0, updated:0, skipped:0, errors:[]}, $box, $button);
-				});
-			})(jQuery);"
-		);
-	}
-
-	/**
-	 * Maneja la importación vía AJAX.
-	 */
-	public function handle_ajax_import() {
+	public function handle_import_request() {
 		if ( ! current_user_can( 'manage_woocommerce' ) ) {
-			wp_send_json_error( array( 'message' => __( 'No autorizado.', 'maxima-integrations' ) ), 403 );
+			wp_die( esc_html__( 'No autorizado.', 'maxima-integrations' ) );
 		}
 
-		$nonce = isset( $_POST['nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['nonce'] ) ) : '';
+		$nonce = isset( $_POST['maxima_import_products_nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['maxima_import_products_nonce'] ) ) : '';
 		if ( ! wp_verify_nonce( $nonce, 'maxima_import_products' ) ) {
-			wp_send_json_error( array( 'message' => __( 'Nonce inválido.', 'maxima-integrations' ) ), 400 );
+			wp_die( esc_html__( 'Nonce inválido.', 'maxima-integrations' ) );
 		}
 
 		$store_id = isset( $_POST['store_id'] ) ? absint( wp_unslash( $_POST['store_id'] ) ) : 0;
-		$offset   = isset( $_POST['offset'] ) ? absint( wp_unslash( $_POST['offset'] ) ) : 0;
-		$limit    = isset( $_POST['limit'] ) ? absint( wp_unslash( $_POST['limit'] ) ) : $this->batch_size;
-
 		if ( ! $store_id ) {
-			wp_send_json_error( array( 'message' => __( 'Tienda inválida.', 'maxima-integrations' ) ), 400 );
+			$this->store_notice( array( 'errors' => array( __( 'Tienda inválida.', 'maxima-integrations' ) ) ) );
+			$this->redirect_back( $store_id );
 		}
 
 		$store_status = get_post_meta( $store_id, '_maxima_store_status', true );
 		if ( 'active' !== $store_status ) {
-			wp_send_json_error( array( 'message' => __( 'La tienda no está activa.', 'maxima-integrations' ) ), 400 );
+			$this->store_notice( array( 'errors' => array( __( 'La tienda no está activa.', 'maxima-integrations' ) ) ) );
+			$this->redirect_back( $store_id );
 		}
 
-		$result = $this->import_products_batch( $store_id, $offset, $limit );
+		$config = $this->validate_store_config( $store_id );
+		if ( is_wp_error( $config ) ) {
+			$this->log_debug( $config->get_error_message() );
+			$this->store_notice( array( 'errors' => array( $config->get_error_message() ) ) );
+			$this->redirect_back( $store_id );
+		}
+
+		$response = $this->test_products_endpoint( $store_id, $config );
+		if ( is_wp_error( $response ) ) {
+			$this->log_debug( $response->get_error_message() );
+			$this->store_notice( array( 'errors' => array( $response->get_error_message() ) ) );
+			$this->redirect_back( $store_id );
+		}
+
+		$products = $this->normalize_products_response( $response );
+		if ( is_wp_error( $products ) ) {
+			$this->log_debug( $products->get_error_message() );
+			$this->store_notice( array( 'errors' => array( $products->get_error_message() ) ) );
+			$this->redirect_back( $store_id );
+		}
+
+		$result = $this->import_products_list( $store_id, $products );
 		if ( is_wp_error( $result ) ) {
-			error_log( 'Maxima Integrations: ' . $result->get_error_message() );
-			wp_send_json_error( array( 'message' => $result->get_error_message() ), 500 );
+			$this->log_debug( $result->get_error_message() );
+			$this->store_notice( array( 'errors' => array( $result->get_error_message() ) ) );
+			$this->redirect_back( $store_id );
 		}
 
-		wp_send_json_success( $result );
+		$this->store_notice( $result );
+		$this->redirect_back( $store_id );
 	}
 
 	/**
-	 * Importa un lote de productos.
+	 * Renderiza notices de importación.
+	 */
+	public function render_admin_notices() {
+		$screen = function_exists( 'get_current_screen' ) ? get_current_screen() : null;
+		if ( ! $screen || 'external_store' !== $screen->post_type ) {
+			return;
+		}
+
+		$notice = $this->get_stored_notice();
+		if ( ! $notice ) {
+			return;
+		}
+
+		$type    = ! empty( $notice['type'] ) ? $notice['type'] : 'info';
+		$errors  = ! empty( $notice['errors'] ) ? (array) $notice['errors'] : array();
+		$imported = isset( $notice['imported'] ) ? (int) $notice['imported'] : 0;
+		$updated  = isset( $notice['updated'] ) ? (int) $notice['updated'] : 0;
+		$skipped  = isset( $notice['skipped'] ) ? (int) $notice['skipped'] : 0;
+
+		?>
+		<div class="notice notice-<?php echo esc_attr( $type ); ?> is-dismissible">
+			<p><strong><?php esc_html_e( 'Resultado de importación Máxima:', 'maxima-integrations' ); ?></strong></p>
+			<?php if ( $errors ) : ?>
+				<ul>
+					<?php foreach ( $errors as $error ) : ?>
+						<li><?php echo esc_html( $error ); ?></li>
+					<?php endforeach; ?>
+				</ul>
+			<?php endif; ?>
+			<p><?php echo esc_html( sprintf( __( 'Importados: %d', 'maxima-integrations' ), $imported ) ); ?></p>
+			<p><?php echo esc_html( sprintf( __( 'Actualizados: %d', 'maxima-integrations' ), $updated ) ); ?></p>
+			<p><?php echo esc_html( sprintf( __( 'Omitidos: %d', 'maxima-integrations' ), $skipped ) ); ?></p>
+		</div>
+		<?php
+	}
+
+	/**
+	 * Valida configuración de la tienda.
 	 *
 	 * @param int $store_id ID de la tienda.
-	 * @param int $offset Offset actual.
-	 * @param int $limit Límite por lote.
 	 * @return array|WP_Error
 	 */
-	private function import_products_batch( $store_id, $offset, $limit ) {
-		if ( function_exists( 'set_time_limit' ) ) {
-			set_time_limit( 30 );
+	private function validate_store_config( $store_id ) {
+		$api_base_url = get_post_meta( $store_id, '_maxima_api_base_url', true );
+		if ( ! $api_base_url ) {
+			return new WP_Error( 'maxima_missing_base_url', __( 'La tienda no tiene URL base configurada.', 'maxima-integrations' ) );
 		}
 
-		$params = apply_filters(
-			'maxima_external_products_request_params',
+		$endpoints_raw = get_post_meta( $store_id, '_maxima_api_endpoints', true );
+		if ( ! $endpoints_raw ) {
+			return new WP_Error( 'maxima_missing_endpoints', __( 'La tienda no tiene endpoints configurados.', 'maxima-integrations' ) );
+		}
+
+		$endpoints = json_decode( $endpoints_raw, true );
+		if ( null === $endpoints && JSON_ERROR_NONE !== json_last_error() ) {
+			return new WP_Error( 'maxima_invalid_endpoints_json', __( 'JSON de endpoints inválido.', 'maxima-integrations' ) );
+		}
+
+		if ( ! is_array( $endpoints ) || empty( $endpoints['products'] ) ) {
+			return new WP_Error( 'maxima_missing_products_endpoint', __( 'El endpoint "products" no está configurado.', 'maxima-integrations' ) );
+		}
+
+		return array(
+			'api_base_url' => $api_base_url,
+			'products'     => (string) $endpoints['products'],
+		);
+	}
+
+	/**
+	 * Prueba la conexión a la API de productos.
+	 *
+	 * @param int   $store_id ID de la tienda.
+	 * @param array $config Configuración validada.
+	 * @return array|WP_Error
+	 */
+	private function test_products_endpoint( $store_id, $config ) {
+		$endpoint_url = trailingslashit( $config['api_base_url'] ) . ltrim( $config['products'], '/' );
+		$headers      = $this->api_client->get_request_headers( $store_id );
+		if ( is_wp_error( $headers ) ) {
+			return $headers;
+		}
+
+		$response = wp_remote_get(
+			$endpoint_url,
 			array(
-				'offset' => $offset,
-				'limit'  => $limit,
-			),
-			$store_id
+				'timeout' => 20,
+				'headers' => $headers,
+			)
 		);
 
-		$products = $this->api_client->get_products( $store_id, $params );
-		if ( is_wp_error( $products ) ) {
-			return $products;
+		if ( is_wp_error( $response ) ) {
+			return new WP_Error(
+				'maxima_api_unreachable',
+				sprintf(
+					__( 'No se pudo conectar con la API externa: %s', 'maxima-integrations' ),
+					$response->get_error_message()
+				)
+			);
 		}
 
-		if ( isset( $products['data'] ) && is_array( $products['data'] ) ) {
-			$products = $products['data'];
-		} elseif ( isset( $products['items'] ) && is_array( $products['items'] ) ) {
-			$products = $products['items'];
+		$status_code = wp_remote_retrieve_response_code( $response );
+		if ( $status_code < 200 || $status_code >= 300 ) {
+			return new WP_Error(
+				'maxima_api_http_error',
+				sprintf(
+					__( 'La API externa devolvió un error HTTP (%d).', 'maxima-integrations' ),
+					(int) $status_code
+				)
+			);
 		}
 
-		if ( ! is_array( $products ) ) {
+		$body = wp_remote_retrieve_body( $response );
+		if ( '' === $body ) {
+			return new WP_Error( 'maxima_api_empty_response', __( 'La API externa devolvió una respuesta vacía.', 'maxima-integrations' ) );
+		}
+
+		$data = json_decode( $body, true );
+		if ( null === $data && JSON_ERROR_NONE !== json_last_error() ) {
+			return new WP_Error( 'maxima_invalid_products_json', __( 'La respuesta de productos no es JSON válido.', 'maxima-integrations' ) );
+		}
+
+		return $data;
+	}
+
+	/**
+	 * Normaliza la respuesta de productos.
+	 *
+	 * @param mixed $response Respuesta JSON ya decodificada.
+	 * @return array|WP_Error
+	 */
+	private function normalize_products_response( $response ) {
+		if ( isset( $response['data'] ) && is_array( $response['data'] ) ) {
+			$response = $response['data'];
+		} elseif ( isset( $response['items'] ) && is_array( $response['items'] ) ) {
+			$response = $response['items'];
+		}
+
+		if ( ! is_array( $response ) ) {
 			return new WP_Error( 'maxima_invalid_products', __( 'Respuesta inválida de productos.', 'maxima-integrations' ) );
+		}
+
+		return $response;
+	}
+
+	/**
+	 * Importa un listado completo de productos.
+	 *
+	 * @param int   $store_id ID de la tienda.
+	 * @param array $products Productos externos.
+	 * @return array|WP_Error
+	 */
+	private function import_products_list( $store_id, $products ) {
+		if ( function_exists( 'set_time_limit' ) ) {
+			set_time_limit( 30 );
 		}
 
 		$products = apply_filters( 'maxima_external_products_list', $products, $store_id );
@@ -221,21 +248,14 @@ final class Maxima_Product_Importer {
 			return new WP_Error( 'maxima_invalid_products', __( 'Respuesta inválida de productos.', 'maxima-integrations' ) );
 		}
 
-		$total_count = count( $products );
-		$batch       = array_slice( $products, $offset, $limit );
-		$has_more    = ( $offset + $limit ) < $total_count;
-		$has_more    = apply_filters( 'maxima_external_products_has_more', $has_more, $products, $offset, $limit, $store_id );
-
 		$result = array(
-			'imported'   => 0,
-			'updated'    => 0,
-			'skipped'    => 0,
-			'errors'     => array(),
-			'has_more'   => $has_more,
-			'next_offset'=> $offset + $limit,
+			'imported' => 0,
+			'updated'  => 0,
+			'skipped'  => 0,
+			'errors'   => array(),
 		);
 
-		foreach ( $batch as $product_data ) {
+		foreach ( $products as $product_data ) {
 			if ( ! is_array( $product_data ) ) {
 				$result['skipped']++;
 				$result['errors'][] = __( 'Producto inválido en la respuesta.', 'maxima-integrations' );
@@ -246,7 +266,7 @@ final class Maxima_Product_Importer {
 			if ( is_wp_error( $import ) ) {
 				$result['skipped']++;
 				$result['errors'][] = $import->get_error_message();
-				error_log( 'Maxima Integrations: ' . $import->get_error_message() );
+				$this->log_debug( $import->get_error_message() );
 				continue;
 			}
 
@@ -258,6 +278,8 @@ final class Maxima_Product_Importer {
 				$result['skipped']++;
 			}
 		}
+
+		$result['type'] = $result['errors'] ? 'warning' : 'success';
 
 		return $result;
 	}
@@ -338,6 +360,82 @@ final class Maxima_Product_Importer {
 		}
 
 		return 'created';
+	}
+
+	/**
+	 * Almacena un notice en transient.
+	 *
+	 * @param array $data Datos del notice.
+	 */
+	private function store_notice( $data ) {
+		$user_id = get_current_user_id();
+		if ( ! $user_id ) {
+			return;
+		}
+
+		$defaults = array(
+			'type'     => 'error',
+			'errors'   => array(),
+			'imported' => 0,
+			'updated'  => 0,
+			'skipped'  => 0,
+		);
+
+		$notice = wp_parse_args( $data, $defaults );
+		set_transient( $this->get_notice_key( $user_id ), $notice, MINUTE_IN_SECONDS * 5 );
+	}
+
+	/**
+	 * Obtiene el notice almacenado.
+	 *
+	 * @return array|null
+	 */
+	private function get_stored_notice() {
+		$user_id = get_current_user_id();
+		if ( ! $user_id ) {
+			return null;
+		}
+
+		$key    = $this->get_notice_key( $user_id );
+		$notice = get_transient( $key );
+		if ( $notice ) {
+			delete_transient( $key );
+			return $notice;
+		}
+
+		return null;
+	}
+
+	/**
+	 * Genera la clave del transient del notice.
+	 *
+	 * @param int $user_id ID de usuario.
+	 * @return string
+	 */
+	private function get_notice_key( $user_id ) {
+		return 'maxima_import_notice_' . (int) $user_id;
+	}
+
+	/**
+	 * Redirige de vuelta al formulario de edición.
+	 *
+	 * @param int $store_id ID de la tienda.
+	 */
+	private function redirect_back( $store_id ) {
+		$location = $store_id ? get_edit_post_link( $store_id, 'url' ) : admin_url( 'edit.php?post_type=external_store' );
+		wp_safe_redirect( $location );
+		exit;
+	}
+
+	/**
+	 * Registra errores si WP_DEBUG está activo.
+	 *
+	 * @param string $message Mensaje.
+	 */
+	private function log_debug( $message ) {
+		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+			error_log( 'Maxima Integrations: ' . $message );
+		}
 	}
 
 	/**

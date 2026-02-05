@@ -122,13 +122,37 @@ final class Maxima_External_Store_Metabox {
 		</table>
 		<?php if ( 'active' === $store_status ) : ?>
 			<div class="maxima-import-products">
-				<p>
-					<button type="button" class="button button-primary" id="maxima-import-products-button" data-store-id="<?php echo esc_attr( $post->ID ); ?>">
-						<?php esc_html_e( 'Importar productos', 'maxima-integrations' ); ?>
-					</button>
-				</p>
-				<div id="maxima-import-products-results" class="notice notice-info" style="display:none;"></div>
+				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" id="maxima-import-products-form">
+					<?php wp_nonce_field( 'maxima_import_products', 'maxima_import_products_nonce' ); ?>
+					<input type="hidden" name="action" value="maxima_import_products" />
+					<input type="hidden" name="store_id" value="<?php echo esc_attr( $post->ID ); ?>" />
+					<p>
+						<button type="submit" class="button button-primary" id="maxima-import-products-button">
+							<?php esc_html_e( 'Importar productos', 'maxima-integrations' ); ?>
+						</button>
+					</p>
+					<div id="maxima-import-products-results" class="notice notice-info" style="display:none;"></div>
+				</form>
 			</div>
+			<script>
+				(function() {
+					var form = document.getElementById('maxima-import-products-form');
+					if (!form) {
+						return;
+					}
+					form.addEventListener('submit', function() {
+						var box = document.getElementById('maxima-import-products-results');
+						var button = document.getElementById('maxima-import-products-button');
+						if (box) {
+							box.style.display = 'block';
+							box.innerHTML = '<p><?php echo esc_js( __( 'Importando productos...', 'maxima-integrations' ) ); ?></p>';
+						}
+						if (button) {
+							button.setAttribute('disabled', 'disabled');
+						}
+					});
+				})();
+			</script>
 		<?php else : ?>
 			<p class="description">
 				<?php esc_html_e( 'Activa la tienda para habilitar la importación de productos.', 'maxima-integrations' ); ?>
