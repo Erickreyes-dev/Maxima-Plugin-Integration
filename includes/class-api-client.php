@@ -78,6 +78,31 @@ final class Maxima_External_API_Client {
 	}
 
 	/**
+	 * Obtiene la URL completa del endpoint de productos.
+	 *
+	 * @param int $store_id ID de la tienda.
+	 * @return string|WP_Error
+	 */
+	public function get_products_endpoint_url( $store_id ) {
+		return $this->get_endpoint( $store_id, 'products' );
+	}
+
+	/**
+	 * Obtiene headers para solicitudes externas.
+	 *
+	 * @param int $store_id ID de la tienda.
+	 * @return array|WP_Error
+	 */
+	public function get_request_headers( $store_id ) {
+		$store_data = $this->get_store_data( $store_id );
+		if ( is_wp_error( $store_data ) ) {
+			return $store_data;
+		}
+
+		return $this->build_headers( $store_data['auth_type'], $store_data['api_key'] );
+	}
+
+	/**
 	 * Obtiene el endpoint configurado para una tienda.
 	 *
 	 * @param int    $store_id ID de la tienda.
