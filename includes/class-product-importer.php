@@ -170,7 +170,7 @@ final class Maxima_Product_Importer {
 	 */
 	public function render_admin_notices() {
 		$screen = function_exists( 'get_current_screen' ) ? get_current_screen() : null;
-		$allowed_screens = array( 'maxima_page_maxima_tiendas' );
+		$allowed_screens = array( 'maxima_page_maxima_tiendas', 'external_store', 'edit-external_store' );
 		if ( ! $screen || ! in_array( $screen->id, $allowed_screens, true ) ) {
 			return;
 		}
@@ -531,6 +531,9 @@ final class Maxima_Product_Importer {
 		}
 
 		$store_id = isset( $_GET['store_id'] ) ? absint( wp_unslash( $_GET['store_id'] ) ) : 0;
+		if ( ! $store_id && isset( $_GET['post'] ) ) {
+			$store_id = absint( wp_unslash( $_GET['post'] ) );
+		}
 		if ( ! $store_id ) {
 			return null;
 		}
@@ -561,7 +564,9 @@ final class Maxima_Product_Importer {
 	 * @param int $store_id ID de la tienda.
 	 */
 	private function redirect_back( $store_id ) {
-		$location = add_query_arg( 'store_id', (int) $store_id, admin_url( 'admin.php?page=maxima_tiendas' ) );
+		$referer  = wp_get_referer();
+		$location = $referer ? $referer : admin_url( 'admin.php?page=maxima_tiendas' );
+		$location = add_query_arg( 'store_id', (int) $store_id, $location );
 		wp_redirect( $location );
 		exit;
 	}
