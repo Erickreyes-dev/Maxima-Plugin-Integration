@@ -32,6 +32,13 @@ final class Maxima_Integrations {
 	private $external_store_cpt;
 
 	/**
+	 * Manejador de admin para tiendas.
+	 *
+	 * @var Maxima_External_Store_Admin
+	 */
+	private $external_store_admin;
+
+	/**
 	 * Manejador metabox.
 	 *
 	 * @var Maxima_External_Store_Metabox
@@ -78,6 +85,7 @@ final class Maxima_Integrations {
 	private function __construct() {
 		add_action( 'init', array( $this, 'load_textdomain' ) );
 
+		$this->external_store_admin   = new Maxima_External_Store_Admin();
 		$this->external_store_cpt     = new Maxima_External_Store_CPT();
 		$this->external_store_metabox = new Maxima_External_Store_Metabox();
 		$this->api_client             = new Maxima_External_API_Client();

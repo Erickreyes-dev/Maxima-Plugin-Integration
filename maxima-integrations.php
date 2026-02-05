@@ -14,6 +14,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 require_once plugin_dir_path( __FILE__ ) . 'includes/class-maxima-integrations.php';
+require_once plugin_dir_path( __FILE__ ) . 'includes/class-external-store-admin.php';
 require_once plugin_dir_path( __FILE__ ) . 'includes/class-external-store-cpt.php';
 require_once plugin_dir_path( __FILE__ ) . 'includes/class-external-store-metabox.php';
 require_once plugin_dir_path( __FILE__ ) . 'includes/class-encryption.php';
