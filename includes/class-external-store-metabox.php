@@ -123,7 +123,7 @@ final class Maxima_External_Store_Metabox {
 		<?php if ( 'active' === $store_status ) : ?>
 			<div class="maxima-import-products">
 				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" id="maxima-import-products-form">
-					<?php wp_nonce_field( 'maxima_import_products', 'maxima_import_products_nonce' ); ?>
+					<?php wp_nonce_field( 'maxima_import_products_action', 'maxima_import_products_nonce' ); ?>
 					<input type="hidden" name="action" value="maxima_import_products" />
 					<input type="hidden" name="store_id" value="<?php echo esc_attr( $post->ID ); ?>" />
 					<p>

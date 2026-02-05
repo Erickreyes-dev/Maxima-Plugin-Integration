@@ -116,4 +116,13 @@ final class Maxima_Integrations {
 			dirname( plugin_basename( dirname( __DIR__ ) . '/maxima-integrations.php' ) ) . '/languages'
 		);
 	}
+
+	/**
+	 * Obtiene el importador de productos.
+	 *
+	 * @return Maxima_Product_Importer|null
+	 */
+	public function get_product_importer() {
+		return $this->product_importer;
+	}
 }
