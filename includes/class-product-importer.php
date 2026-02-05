@@ -25,7 +25,6 @@ final class Maxima_Product_Importer {
 	public function __construct( Maxima_External_API_Client $api_client ) {
 		$this->api_client = $api_client;
 
-		add_action( 'admin_post_maxima_import_products', array( $this, 'handle_import_request' ) );
 		add_action( 'admin_notices', array( $this, 'render_admin_notices' ) );
 	}
 
@@ -33,29 +32,36 @@ final class Maxima_Product_Importer {
 	 * Maneja la importación server-side.
 	 */
 	public function handle_import_request() {
-		if ( ! current_user_can( 'manage_options' ) ) {
-			$this->store_notice( array( 'errors' => array( __( 'No autorizado.', 'maxima-integrations' ) ) ) );
-			$this->redirect_back( 0 );
-		}
-
-		$nonce = isset( $_POST['maxima_import_products_nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['maxima_import_products_nonce'] ) ) : '';
-		if ( ! wp_verify_nonce( $nonce, 'maxima_import_products' ) ) {
-			$this->store_notice( array( 'errors' => array( __( 'Nonce inválido.', 'maxima-integrations' ) ) ) );
-			$this->redirect_back( 0 );
-		}
+		$this->log_debug( 'Iniciando importación de productos.' );
 
 		$store_id = isset( $_POST['store_id'] ) ? absint( wp_unslash( $_POST['store_id'] ) ) : 0;
+
+		if ( ! current_user_can( 'manage_options' ) ) {
+			$this->log_debug( 'Permiso denegado para importar productos.' );
+			$this->store_notice( array( 'errors' => array( __( 'No autorizado.', 'maxima-integrations' ) ) ) );
+			$this->redirect_back( $store_id );
+		}
+
+		if ( ! $this->verify_import_nonce( $store_id ) ) {
+			$this->log_debug( 'Nonce inválido en la importación.' );
+			$this->store_notice( array( 'errors' => array( __( 'Nonce inválido.', 'maxima-integrations' ) ) ) );
+			$this->redirect_back( $store_id );
+		}
+
 		if ( ! $store_id ) {
+			$this->log_debug( 'Store ID inválido en la importación.' );
 			$this->store_notice( array( 'errors' => array( __( 'Tienda inválida.', 'maxima-integrations' ) ) ) );
 			$this->redirect_back( $store_id );
 		}
 
 		$store_status = get_post_meta( $store_id, '_maxima_store_status', true );
 		if ( 'active' !== $store_status ) {
+			$this->log_debug( 'Tienda no activa en la importación.' );
 			$this->store_notice( array( 'errors' => array( __( 'La tienda no está activa.', 'maxima-integrations' ) ) ) );
 			$this->redirect_back( $store_id );
 		}
 
+		$this->log_debug( sprintf( 'Validando configuración de tienda %d.', $store_id ) );
 		$config = $this->validate_store_config( $store_id );
 		if ( is_wp_error( $config ) ) {
 			$this->log_debug( $config->get_error_message() );
@@ -63,6 +69,7 @@ final class Maxima_Product_Importer {
 			$this->redirect_back( $store_id );
 		}
 
+		$this->log_debug( sprintf( 'Probando endpoint de productos para tienda %d.', $store_id ) );
 		$response = $this->test_products_endpoint( $store_id, $config );
 		if ( is_wp_error( $response ) ) {
 			$this->log_debug( $response->get_error_message() );
@@ -77,6 +84,7 @@ final class Maxima_Product_Importer {
 			$this->redirect_back( $store_id );
 		}
 
+		$this->log_debug( sprintf( 'Importando %d productos para tienda %d.', count( $products ), $store_id ) );
 		$result = $this->import_products_list( $store_id, $products );
 		if ( is_wp_error( $result ) ) {
 			$this->log_debug( $result->get_error_message() );
@@ -84,6 +92,7 @@ final class Maxima_Product_Importer {
 			$this->redirect_back( $store_id );
 		}
 
+		$this->log_debug( sprintf( 'Importación completada para tienda %d.', $store_id ) );
 		$this->store_notice( $result );
 		$this->redirect_back( $store_id );
 	}
@@ -334,6 +343,9 @@ final class Maxima_Product_Importer {
 			$product->set_slug( sanitize_title( $name ) );
 			$product->set_description( $description );
 			$product->set_short_description( $short_desc );
+			$product->update_meta_data( '_maxima_is_external', true );
+			$product->update_meta_data( '_maxima_external_store_id', (int) $store_id );
+			$product->update_meta_data( '_maxima_external_product_id', $external_id );
 			$product->save();
 
 			if ( $image_url ) {
@@ -349,7 +361,7 @@ final class Maxima_Product_Importer {
 		$product->set_description( $description );
 		$product->set_short_description( $short_desc );
 		$product->set_status( 'publish' );
-		$product->update_meta_data( '_maxima_is_external', 'yes' );
+		$product->update_meta_data( '_maxima_is_external', true );
 		$product->update_meta_data( '_maxima_external_store_id', (int) $store_id );
 		$product->update_meta_data( '_maxima_external_product_id', $external_id );
 
@@ -425,10 +437,7 @@ final class Maxima_Product_Importer {
 	 * @param int $store_id ID de la tienda.
 	 */
 	private function redirect_back( $store_id ) {
-		$location = admin_url( 'admin.php?page=maxima_tiendas' );
-		if ( $store_id ) {
-			$location = add_query_arg( 'store_id', (int) $store_id, $location );
-		}
+		$location = add_query_arg( 'store_id', (int) $store_id, admin_url( 'admin.php?page=maxima_tiendas' ) );
 		wp_redirect( $location );
 		exit;
 	}
@@ -442,6 +451,55 @@ final class Maxima_Product_Importer {
 		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
 			error_log( 'Maxima Integrations: ' . $message );
 		}
+	}
+
+	/**
+	 * Valida el nonce de importación evitando wp_die silencioso.
+	 *
+	 * @param int $store_id ID de la tienda para la redirección.
+	 * @return bool
+	 */
+	private function verify_import_nonce( $store_id ) {
+		add_filter( 'wp_die_handler', array( $this, 'get_wp_die_handler' ) );
+		$result = check_admin_referer( 'maxima_import_products_action', 'maxima_import_products_nonce' );
+		remove_filter( 'wp_die_handler', array( $this, 'get_wp_die_handler' ) );
+
+		if ( ! $result ) {
+			$this->store_notice( array( 'errors' => array( __( 'Nonce inválido.', 'maxima-integrations' ) ) ) );
+			$this->redirect_back( $store_id );
+		}
+
+		return (bool) $result;
+	}
+
+	/**
+	 * Obtiene el handler para interceptar wp_die.
+	 *
+	 * @return callable
+	 */
+	public function get_wp_die_handler() {
+		return array( $this, 'handle_wp_die' );
+	}
+
+	/**
+	 * Intercepta wp_die para evitar pantallas silenciosas.
+	 *
+	 * @param string|WP_Error $message Mensaje recibido.
+	 * @param string          $title   Título.
+	 * @param array           $args    Argumentos.
+	 */
+	public function handle_wp_die( $message, $title = '', $args = array() ) {
+		$store_id = isset( $_POST['store_id'] ) ? absint( wp_unslash( $_POST['store_id'] ) ) : 0;
+		$error    = __( 'No se pudo validar la solicitud.', 'maxima-integrations' );
+		if ( $message instanceof WP_Error ) {
+			$error = $message->get_error_message();
+		} elseif ( is_string( $message ) && '' !== $message ) {
+			$error = wp_strip_all_tags( $message );
+		}
+
+		$this->log_debug( sprintf( 'Interceptado wp_die: %s', $error ) );
+		$this->store_notice( array( 'errors' => array( $error ) ) );
+		$this->redirect_back( $store_id );
 	}
 
 	/**
