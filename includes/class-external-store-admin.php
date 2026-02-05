@@ -17,6 +17,7 @@ final class Maxima_External_Store_Admin {
 		add_action( 'admin_menu', array( $this, 'register_menu' ) );
 		add_action( 'admin_init', array( $this, 'redirect_legacy_screens' ) );
 		add_action( 'admin_post_maxima_save_store', array( $this, 'handle_save_store' ) );
+		add_action( 'admin_post_maxima_delete_store', array( $this, 'handle_delete_store' ) );
 		add_action( 'admin_notices', array( $this, 'render_admin_notices' ) );
 	}
 
@@ -136,6 +137,14 @@ final class Maxima_External_Store_Admin {
 										<a class="button" href="<?php echo esc_url( admin_url( 'admin.php?page=maxima_tiendas&store_id=' . $item->ID ) ); ?>">
 											<?php esc_html_e( 'Editar', 'maxima-integrations' ); ?>
 										</a>
+										<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:inline;">
+											<?php wp_nonce_field( 'maxima_delete_store', 'maxima_delete_store_nonce' ); ?>
+											<input type="hidden" name="action" value="maxima_delete_store" />
+											<input type="hidden" name="store_id" value="<?php echo esc_attr( $item->ID ); ?>" />
+											<button type="submit" class="button button-link-delete" onclick="return confirm('<?php echo esc_js( __( '¿Eliminar esta tienda?', 'maxima-integrations' ) ); ?>');">
+												<?php esc_html_e( 'Eliminar', 'maxima-integrations' ); ?>
+											</button>
+										</form>
 									</td>
 								</tr>
 							<?php endforeach; ?>
@@ -275,6 +284,18 @@ final class Maxima_External_Store_Admin {
 						<?php esc_html_e( 'Activa la tienda para habilitar la importación de productos.', 'maxima-integrations' ); ?>
 					</p>
 				<?php endif; ?>
+				<?php if ( $store_id ) : ?>
+					<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+						<?php wp_nonce_field( 'maxima_delete_store', 'maxima_delete_store_nonce' ); ?>
+						<input type="hidden" name="action" value="maxima_delete_store" />
+						<input type="hidden" name="store_id" value="<?php echo esc_attr( $store_id ); ?>" />
+						<p>
+							<button type="submit" class="button button-link-delete" onclick="return confirm('<?php echo esc_js( __( '¿Eliminar esta tienda?', 'maxima-integrations' ) ); ?>');">
+								<?php esc_html_e( 'Eliminar tienda', 'maxima-integrations' ); ?>
+							</button>
+						</p>
+					</form>
+				<?php endif; ?>
 			</div>
 		</div>
 		<?php
@@ -285,12 +306,14 @@ final class Maxima_External_Store_Admin {
 	 */
 	public function handle_save_store() {
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_die( esc_html__( 'No autorizado.', 'maxima-integrations' ) );
+			$this->store_notice( array( 'type' => 'error', 'message' => __( 'No autorizado.', 'maxima-integrations' ) ) );
+			$this->redirect_back( 0 );
 		}
 
 		$nonce = isset( $_POST['maxima_save_store_nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['maxima_save_store_nonce'] ) ) : '';
 		if ( ! wp_verify_nonce( $nonce, 'maxima_save_store' ) ) {
-			wp_die( esc_html__( 'Nonce inválido.', 'maxima-integrations' ) );
+			$this->store_notice( array( 'type' => 'error', 'message' => __( 'Nonce inválido.', 'maxima-integrations' ) ) );
+			$this->redirect_back( 0 );
 		}
 
 		$store_id   = isset( $_POST['store_id'] ) ? absint( wp_unslash( $_POST['store_id'] ) ) : 0;
@@ -309,12 +332,23 @@ final class Maxima_External_Store_Admin {
 
 		$result = wp_update_post( $post_data, true );
 		if ( is_wp_error( $result ) || ! $result ) {
-			$this->store_notice(
-				array(
-					'type'    => 'error',
-					'message' => __( 'No se pudo guardar la tienda.', 'maxima-integrations' ),
-				)
-			);
+			if ( is_wp_error( $result ) ) {
+				error_log( 'Maxima Integrations: Error guardando tienda: ' . $result->get_error_message() );
+				$this->store_notice(
+					array(
+						'type'    => 'error',
+						'message' => $result->get_error_message(),
+					)
+				);
+			} else {
+				error_log( 'Maxima Integrations: Error guardando tienda: wp_update_post devolvió 0.' );
+				$this->store_notice(
+					array(
+						'type'    => 'error',
+						'message' => __( 'No se pudo guardar la tienda.', 'maxima-integrations' ),
+					)
+				);
+			}
 			$this->redirect_back( $store_id );
 		}
 
@@ -354,6 +388,37 @@ final class Maxima_External_Store_Admin {
 
 		$this->store_notice( array( 'type' => 'success', 'message' => __( 'Tienda guardada correctamente.', 'maxima-integrations' ) ) );
 		$this->redirect_back( $store_id );
+	}
+
+	/**
+	 * Maneja la eliminación de la tienda.
+	 */
+	public function handle_delete_store() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			$this->store_notice( array( 'type' => 'error', 'message' => __( 'No autorizado.', 'maxima-integrations' ) ) );
+			$this->redirect_back( 0 );
+		}
+
+		$nonce = isset( $_POST['maxima_delete_store_nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['maxima_delete_store_nonce'] ) ) : '';
+		if ( ! wp_verify_nonce( $nonce, 'maxima_delete_store' ) ) {
+			$this->store_notice( array( 'type' => 'error', 'message' => __( 'Nonce inválido.', 'maxima-integrations' ) ) );
+			$this->redirect_back( 0 );
+		}
+
+		$store_id = isset( $_POST['store_id'] ) ? absint( wp_unslash( $_POST['store_id'] ) ) : 0;
+		if ( ! $store_id ) {
+			$this->store_notice( array( 'type' => 'error', 'message' => __( 'Tienda inválida.', 'maxima-integrations' ) ) );
+			$this->redirect_back( 0 );
+		}
+
+		$result = wp_delete_post( $store_id, true );
+		if ( ! $result ) {
+			$this->store_notice( array( 'type' => 'error', 'message' => __( 'No se pudo eliminar la tienda.', 'maxima-integrations' ) ) );
+			$this->redirect_back( $store_id );
+		}
+
+		$this->store_notice( array( 'type' => 'success', 'message' => __( 'Tienda eliminada correctamente.', 'maxima-integrations' ) ) );
+		$this->redirect_back( 0 );
 	}
 
 	/**
