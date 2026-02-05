@@ -45,7 +45,7 @@ final class Maxima_External_Store_CPT {
 			'labels'             => $labels,
 			'public'             => false,
 			'show_ui'            => true,
-			'show_in_menu'       => true,
+			'show_in_menu'       => false,
 			'exclude_from_search'=> true,
 			'publicly_queryable' => false,
 			'has_archive'        => false,
