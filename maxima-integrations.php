@@ -19,5 +19,6 @@ require_once plugin_dir_path( __FILE__ ) . 'includes/class-external-store-metabo
 require_once plugin_dir_path( __FILE__ ) . 'includes/class-encryption.php';
 require_once plugin_dir_path( __FILE__ ) . 'includes/class-api-client.php';
 require_once plugin_dir_path( __FILE__ ) . 'includes/class-woocommerce-integration.php';
+require_once plugin_dir_path( __FILE__ ) . 'includes/class-product-importer.php';
 
 Maxima_Integrations::get_instance();
