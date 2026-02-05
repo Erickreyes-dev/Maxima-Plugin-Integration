@@ -33,31 +33,54 @@ final class Maxima_Product_Importer {
 	 */
 	public function handle_import_request() {
 		$this->log_debug( 'Iniciando importación de productos.' );
+		if ( isset( $_SERVER['REQUEST_URI'] ) ) {
+			$this->log_debug( sprintf( 'URL llamada: %s', wp_unslash( $_SERVER['REQUEST_URI'] ) ) );
+		}
 
 		$store_id = isset( $_POST['store_id'] ) ? absint( wp_unslash( $_POST['store_id'] ) ) : 0;
 
 		if ( ! current_user_can( 'manage_options' ) ) {
 			$this->log_debug( 'Permiso denegado para importar productos.' );
-			$this->store_notice( array( 'errors' => array( __( 'No autorizado.', 'maxima-integrations' ) ) ) );
+			$this->store_notice(
+				array(
+					'errors'   => array( __( 'No autorizado.', 'maxima-integrations' ) ),
+					'store_id' => $store_id,
+				)
+			);
 			$this->redirect_back( $store_id );
 		}
 
 		if ( ! $this->verify_import_nonce( $store_id ) ) {
 			$this->log_debug( 'Nonce inválido en la importación.' );
-			$this->store_notice( array( 'errors' => array( __( 'Nonce inválido.', 'maxima-integrations' ) ) ) );
+			$this->store_notice(
+				array(
+					'errors'   => array( __( 'Nonce inválido.', 'maxima-integrations' ) ),
+					'store_id' => $store_id,
+				)
+			);
 			$this->redirect_back( $store_id );
 		}
 
 		if ( ! $store_id ) {
 			$this->log_debug( 'Store ID inválido en la importación.' );
-			$this->store_notice( array( 'errors' => array( __( 'Tienda inválida.', 'maxima-integrations' ) ) ) );
+			$this->store_notice(
+				array(
+					'errors'   => array( __( 'Tienda inválida.', 'maxima-integrations' ) ),
+					'store_id' => $store_id,
+				)
+			);
 			$this->redirect_back( $store_id );
 		}
 
 		$store_status = get_post_meta( $store_id, '_maxima_store_status', true );
 		if ( 'active' !== $store_status ) {
 			$this->log_debug( 'Tienda no activa en la importación.' );
-			$this->store_notice( array( 'errors' => array( __( 'La tienda no está activa.', 'maxima-integrations' ) ) ) );
+			$this->store_notice(
+				array(
+					'errors'   => array( __( 'La tienda no está activa.', 'maxima-integrations' ) ),
+					'store_id' => $store_id,
+				)
+			);
 			$this->redirect_back( $store_id );
 		}
 
@@ -65,7 +88,12 @@ final class Maxima_Product_Importer {
 		$config = $this->validate_store_config( $store_id );
 		if ( is_wp_error( $config ) ) {
 			$this->log_debug( $config->get_error_message() );
-			$this->store_notice( array( 'errors' => array( $config->get_error_message() ) ) );
+			$this->store_notice(
+				array(
+					'errors'   => array( $config->get_error_message() ),
+					'store_id' => $store_id,
+				)
+			);
 			$this->redirect_back( $store_id );
 		}
 
@@ -73,26 +101,42 @@ final class Maxima_Product_Importer {
 		$response = $this->test_products_endpoint( $store_id, $config );
 		if ( is_wp_error( $response ) ) {
 			$this->log_debug( $response->get_error_message() );
-			$this->store_notice( array( 'errors' => array( $response->get_error_message() ) ) );
+			$this->store_notice(
+				array(
+					'errors'   => array( $response->get_error_message() ),
+					'store_id' => $store_id,
+				)
+			);
 			$this->redirect_back( $store_id );
 		}
 
 		$products = $this->normalize_products_response( $response );
 		if ( is_wp_error( $products ) ) {
 			$this->log_debug( $products->get_error_message() );
-			$this->store_notice( array( 'errors' => array( $products->get_error_message() ) ) );
+			$this->store_notice(
+				array(
+					'errors'   => array( $products->get_error_message() ),
+					'store_id' => $store_id,
+				)
+			);
 			$this->redirect_back( $store_id );
 		}
 
+		$this->log_debug( sprintf( 'Cantidad de productos recibidos: %d', count( $products ) ) );
 		$this->log_debug( sprintf( 'Importando %d productos para tienda %d.', count( $products ), $store_id ) );
 		$result = $this->import_products_list( $store_id, $products );
 		if ( is_wp_error( $result ) ) {
 			$this->log_debug( $result->get_error_message() );
-			$this->store_notice( array( 'errors' => array( $result->get_error_message() ) ) );
+			$this->store_notice(
+				array(
+					'errors'   => array( $result->get_error_message() ),
+					'store_id' => $store_id,
+				)
+			);
 			$this->redirect_back( $store_id );
 		}
 
-		$this->log_debug( sprintf( 'Importación completada para tienda %d.', $store_id ) );
+		$this->log_debug( sprintf( 'Importación completada para tienda %d. Resultado: %s', $store_id, wp_json_encode( $result ) ) );
 		$this->store_notice( $result );
 		$this->redirect_back( $store_id );
 	}
@@ -112,27 +156,49 @@ final class Maxima_Product_Importer {
 			return;
 		}
 
-		$type    = ! empty( $notice['type'] ) ? $notice['type'] : 'info';
 		$errors  = ! empty( $notice['errors'] ) ? (array) $notice['errors'] : array();
+		$error_count = isset( $notice['errors_count'] ) ? (int) $notice['errors_count'] : count( $errors );
 		$imported = isset( $notice['imported'] ) ? (int) $notice['imported'] : 0;
-		$updated  = isset( $notice['updated'] ) ? (int) $notice['updated'] : 0;
 		$skipped  = isset( $notice['skipped'] ) ? (int) $notice['skipped'] : 0;
 
-		?>
-		<div class="notice notice-<?php echo esc_attr( $type ); ?> is-dismissible">
-			<p><strong><?php esc_html_e( 'Resultado de importación Máxima:', 'maxima-integrations' ); ?></strong></p>
-			<?php if ( $errors ) : ?>
-				<ul>
-					<?php foreach ( $errors as $error ) : ?>
-						<li><?php echo esc_html( $error ); ?></li>
-					<?php endforeach; ?>
-				</ul>
-			<?php endif; ?>
-			<p><?php echo esc_html( sprintf( __( 'Importados: %d', 'maxima-integrations' ), $imported ) ); ?></p>
-			<p><?php echo esc_html( sprintf( __( 'Actualizados: %d', 'maxima-integrations' ), $updated ) ); ?></p>
-			<p><?php echo esc_html( sprintf( __( 'Omitidos: %d', 'maxima-integrations' ), $skipped ) ); ?></p>
-		</div>
-		<?php
+		if ( 0 === $imported && 0 === $skipped && 0 === $error_count ) {
+			?>
+			<div class="notice notice-warning is-dismissible">
+				<p><?php esc_html_e( 'No se importaron productos.', 'maxima-integrations' ); ?></p>
+			</div>
+			<?php
+		} else {
+			if ( $imported > 0 ) {
+				?>
+				<div class="notice notice-success is-dismissible">
+					<p><?php echo esc_html( sprintf( __( '%d productos importados correctamente', 'maxima-integrations' ), $imported ) ); ?></p>
+				</div>
+				<?php
+			}
+
+			if ( $skipped > 0 ) {
+				?>
+				<div class="notice notice-warning is-dismissible">
+					<p><?php echo esc_html( sprintf( __( '%d productos omitidos', 'maxima-integrations' ), $skipped ) ); ?></p>
+				</div>
+				<?php
+			}
+
+			if ( $error_count > 0 ) {
+				?>
+				<div class="notice notice-error is-dismissible">
+					<p><?php esc_html_e( 'Ocurrieron errores durante la importación.', 'maxima-integrations' ); ?></p>
+					<?php if ( $errors ) : ?>
+						<ul>
+							<?php foreach ( $errors as $error ) : ?>
+								<li><?php echo esc_html( $error ); ?></li>
+							<?php endforeach; ?>
+						</ul>
+					<?php endif; ?>
+				</div>
+				<?php
+			}
+		}
 	}
 
 	/**
@@ -262,9 +328,9 @@ final class Maxima_Product_Importer {
 
 		$result = array(
 			'imported' => 0,
-			'updated'  => 0,
 			'skipped'  => 0,
 			'errors'   => array(),
+			'store_id' => (int) $store_id,
 		);
 
 		foreach ( $products as $product_data ) {
@@ -282,16 +348,15 @@ final class Maxima_Product_Importer {
 				continue;
 			}
 
-			if ( 'created' === $import ) {
+			if ( 'created' === $import || 'updated' === $import ) {
 				$result['imported']++;
-			} elseif ( 'updated' === $import ) {
-				$result['updated']++;
 			} else {
 				$result['skipped']++;
 			}
 		}
 
-		$result['type'] = $result['errors'] ? 'warning' : 'success';
+		$result['errors_count'] = count( $result['errors'] );
+		$result['timestamp']    = current_time( 'timestamp' );
 
 		return $result;
 	}
@@ -389,15 +454,17 @@ final class Maxima_Product_Importer {
 		}
 
 		$defaults = array(
-			'type'     => 'error',
 			'errors'   => array(),
 			'imported' => 0,
-			'updated'  => 0,
 			'skipped'  => 0,
+			'store_id' => 0,
+			'timestamp' => current_time( 'timestamp' ),
 		);
 
 		$notice = wp_parse_args( $data, $defaults );
-		set_transient( $this->get_notice_key( $user_id ), $notice, MINUTE_IN_SECONDS * 5 );
+		$notice['errors_count'] = isset( $notice['errors_count'] ) ? (int) $notice['errors_count'] : count( (array) $notice['errors'] );
+		$store_id = isset( $notice['store_id'] ) ? (int) $notice['store_id'] : 0;
+		set_transient( $this->get_notice_key( $user_id, $store_id ), $notice, MINUTE_IN_SECONDS * 5 );
 	}
 
 	/**
@@ -411,7 +478,12 @@ final class Maxima_Product_Importer {
 			return null;
 		}
 
-		$key    = $this->get_notice_key( $user_id );
+		$store_id = isset( $_GET['store_id'] ) ? absint( wp_unslash( $_GET['store_id'] ) ) : 0;
+		if ( ! $store_id ) {
+			return null;
+		}
+
+		$key    = $this->get_notice_key( $user_id, $store_id );
 		$notice = get_transient( $key );
 		if ( $notice ) {
 			delete_transient( $key );
@@ -427,8 +499,8 @@ final class Maxima_Product_Importer {
 	 * @param int $user_id ID de usuario.
 	 * @return string
 	 */
-	private function get_notice_key( $user_id ) {
-		return 'maxima_import_notice_' . (int) $user_id;
+	private function get_notice_key( $user_id, $store_id ) {
+		return sprintf( 'maxima_import_notice_%d_%d', (int) $user_id, (int) $store_id );
 	}
 
 	/**
@@ -465,7 +537,12 @@ final class Maxima_Product_Importer {
 		remove_filter( 'wp_die_handler', array( $this, 'get_wp_die_handler' ) );
 
 		if ( ! $result ) {
-			$this->store_notice( array( 'errors' => array( __( 'Nonce inválido.', 'maxima-integrations' ) ) ) );
+			$this->store_notice(
+				array(
+					'errors'   => array( __( 'Nonce inválido.', 'maxima-integrations' ) ),
+					'store_id' => $store_id,
+				)
+			);
 			$this->redirect_back( $store_id );
 		}
 
@@ -498,7 +575,12 @@ final class Maxima_Product_Importer {
 		}
 
 		$this->log_debug( sprintf( 'Interceptado wp_die: %s', $error ) );
-		$this->store_notice( array( 'errors' => array( $error ) ) );
+		$this->store_notice(
+			array(
+				'errors'   => array( $error ),
+				'store_id' => $store_id,
+			)
+		);
 		$this->redirect_back( $store_id );
 	}
 
