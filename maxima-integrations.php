@@ -163,6 +163,7 @@ final class Maxima_Integrations {
 		$api_base_url = get_post_meta( $post->ID, '_maxima_api_base_url', true );
 		$auth_type    = get_post_meta( $post->ID, '_maxima_auth_type', true );
 		$notes        = get_post_meta( $post->ID, '_maxima_notes', true );
+		$api_endpoints = get_post_meta( $post->ID, '_maxima_api_endpoints', true );
 		$encrypted    = get_post_meta( $post->ID, '_maxima_api_key', true );
 		$api_key      = $encrypted ? Maxima_Integrations_Crypto::decrypt( $encrypted ) : '';
 
@@ -219,6 +220,22 @@ final class Maxima_Integrations {
 						<textarea name="maxima_notes" id="maxima_notes" rows="4" class="large-text"><?php echo esc_textarea( $notes ); ?></textarea>
 					</td>
 				</tr>
+				<tr>
+					<th scope="row">
+						<label for="maxima_api_endpoints"><?php esc_html_e( 'Endpoints de la API', 'maxima-integrations' ); ?></label>
+					</th>
+					<td>
+						<textarea name="maxima_api_endpoints" id="maxima_api_endpoints" rows="6" class="large-text code"><?php echo esc_textarea( $api_endpoints ); ?></textarea>
+						<p class="description">
+							<?php esc_html_e( 'Ejemplo de JSON esperado:', 'maxima-integrations' ); ?>
+						</p>
+						<pre><code>{
+  "product": "/products/{id}",
+  "stock": "/products/{id}/stock",
+  "order": "/orders"
+}</code></pre>
+					</td>
+				</tr>
 			</tbody>
 		</table>
 		<?php
@@ -250,12 +267,25 @@ final class Maxima_Integrations {
 		$auth_type    = isset( $_POST['maxima_auth_type'] ) ? sanitize_text_field( wp_unslash( $_POST['maxima_auth_type'] ) ) : 'none';
 		$api_base_url = isset( $_POST['maxima_api_base_url'] ) ? esc_url_raw( wp_unslash( $_POST['maxima_api_base_url'] ) ) : '';
 		$notes        = isset( $_POST['maxima_notes'] ) ? sanitize_textarea_field( wp_unslash( $_POST['maxima_notes'] ) ) : '';
+		$endpoints_raw = isset( $_POST['maxima_api_endpoints'] ) ? wp_unslash( $_POST['maxima_api_endpoints'] ) : '';
 		$api_key_raw  = isset( $_POST['maxima_api_key'] ) ? wp_unslash( $_POST['maxima_api_key'] ) : '';
 
 		update_post_meta( $post_id, '_maxima_store_status', $store_status );
 		update_post_meta( $post_id, '_maxima_api_base_url', $api_base_url );
 		update_post_meta( $post_id, '_maxima_auth_type', $auth_type );
 		update_post_meta( $post_id, '_maxima_notes', $notes );
+
+		if ( '' !== trim( $endpoints_raw ) ) {
+			$sanitized_endpoints = trim( sanitize_textarea_field( $endpoints_raw ) );
+			$decoded_endpoints   = json_decode( $sanitized_endpoints, true );
+			if ( null === $decoded_endpoints && JSON_ERROR_NONE !== json_last_error() ) {
+				error_log( 'Maxima Integrations: JSON inválido para endpoints en store ID ' . (int) $post_id );
+			} else {
+				update_post_meta( $post_id, '_maxima_api_endpoints', wp_json_encode( $decoded_endpoints ) );
+			}
+		} else {
+			delete_post_meta( $post_id, '_maxima_api_endpoints' );
+		}
 
 		if ( '' !== $api_key_raw ) {
 			$encrypted = Maxima_Integrations_Crypto::encrypt( sanitize_text_field( $api_key_raw ) );
@@ -365,8 +395,25 @@ final class Maxima_External_API_Client {
 	 * @return array|WP_Error|null
 	 */
 	public function get_product_availability( $store_id, $external_product_id ) {
-		$endpoint = '/products/' . rawurlencode( (string) $external_product_id );
-		$response = $this->request( $store_id, 'GET', $endpoint, array() );
+		$endpoint = $this->get_endpoint( $store_id, 'product' );
+		if ( is_wp_error( $endpoint ) ) {
+			$endpoint = $this->get_endpoint( $store_id, 'stock' );
+		}
+
+		if ( is_wp_error( $endpoint ) ) {
+			return $endpoint;
+		}
+
+		$url = str_replace(
+			array( '{id}', '{sku}' ),
+			array(
+				rawurlencode( (string) $external_product_id ),
+				rawurlencode( (string) $external_product_id ),
+			),
+			$endpoint
+		);
+
+		$response = $this->request( $store_id, 'GET', $url, array() );
 		if ( is_wp_error( $response ) ) {
 			return $response;
 		}
@@ -379,9 +426,44 @@ final class Maxima_External_API_Client {
 		}
 
 		return array(
-			'stock' => $stock,
-			'price' => $price,
+			'stock' => null === $stock ? null : (int) $stock,
+			'price' => null === $price ? null : (float) $price,
 		);
+	}
+
+	/**
+	 * Obtiene el endpoint configurado para una tienda.
+	 *
+	 * @param int    $store_id ID de la tienda.
+	 * @param string $key Clave del endpoint.
+	 * @return string|WP_Error
+	 */
+	protected function get_endpoint( $store_id, $key ) {
+		$endpoints_raw = get_post_meta( $store_id, '_maxima_api_endpoints', true );
+		if ( ! $endpoints_raw ) {
+			return new WP_Error( 'maxima_missing_endpoints', __( 'La tienda no tiene endpoints configurados.', 'maxima-integrations' ) );
+		}
+
+		$endpoints = json_decode( $endpoints_raw, true );
+		if ( null === $endpoints && JSON_ERROR_NONE !== json_last_error() ) {
+			return new WP_Error( 'maxima_invalid_endpoints_json', __( 'JSON de endpoints inválido.', 'maxima-integrations' ) );
+		}
+
+		if ( ! is_array( $endpoints ) || empty( $endpoints[ $key ] ) ) {
+			return new WP_Error( 'maxima_missing_endpoint', __( 'Endpoint solicitado no configurado.', 'maxima-integrations' ) );
+		}
+
+		$endpoint = trim( (string) $endpoints[ $key ] );
+		if ( '' === $endpoint ) {
+			return new WP_Error( 'maxima_invalid_endpoint', __( 'Endpoint inválido.', 'maxima-integrations' ) );
+		}
+
+		$store_data = $this->get_store_data( $store_id );
+		if ( is_wp_error( $store_data ) ) {
+			return $store_data;
+		}
+
+		return trailingslashit( $store_data['api_base_url'] ) . ltrim( $endpoint, '/' );
 	}
 
 	/**
@@ -389,12 +471,12 @@ final class Maxima_External_API_Client {
 	 *
 	 * @param int    $store_id ID de la tienda.
 	 * @param string $method Método HTTP.
-	 * @param string $endpoint Endpoint.
+	 * @param string $url URL completa.
 	 * @param array  $params Parámetros.
 	 * @return array|WP_Error
 	 */
-	private function request( $store_id, $method, $endpoint, $params ) {
-		$cache_key = $this->get_cache_key( $store_id, $method, $endpoint, $params );
+	private function request( $store_id, $method, $url, $params ) {
+		$cache_key = $this->get_cache_key( $store_id, $method, $url, $params );
 		$cached    = get_transient( $cache_key );
 		if ( false !== $cached ) {
 			return $cached;
@@ -405,7 +487,6 @@ final class Maxima_External_API_Client {
 			return $store_data;
 		}
 
-		$url = trailingslashit( $store_data['api_base_url'] ) . ltrim( $endpoint, '/' );
 		$headers = $this->build_headers( $store_data['auth_type'], $store_data['api_key'] );
 		$args = array(
 			'timeout' => 15,
@@ -508,15 +589,15 @@ final class Maxima_External_API_Client {
 	 *
 	 * @param int    $store_id ID de la tienda.
 	 * @param string $method Método HTTP.
-	 * @param string $endpoint Endpoint.
+	 * @param string $url URL completa.
 	 * @param array  $params Parámetros.
 	 * @return string
 	 */
-	private function get_cache_key( $store_id, $method, $endpoint, $params ) {
+	private function get_cache_key( $store_id, $method, $url, $params ) {
 		$payload = array(
 			'store_id' => (int) $store_id,
 			'method'   => strtoupper( $method ),
-			'endpoint' => $endpoint,
+			'endpoint' => $url,
 			'params'   => $params,
 		);
 
