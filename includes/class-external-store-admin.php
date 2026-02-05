@@ -325,13 +325,17 @@ final class Maxima_External_Store_Admin {
 		}
 
 		$post_data = array(
-			'ID'         => $store_id,
-			'post_type'  => 'external_store',
-			'post_title' => $store_name,
-			'post_status'=> 'publish',
+			'post_type'   => 'external_store',
+			'post_title'  => $store_name,
+			'post_status' => 'publish',
 		);
 
-		$result = wp_update_post( $post_data, true );
+		if ( $store_id ) {
+			$post_data['ID'] = $store_id;
+			$result = wp_update_post( $post_data, true );
+		} else {
+			$result = wp_insert_post( $post_data, true );
+		}
 		if ( is_wp_error( $result ) || ! $result ) {
 			if ( is_wp_error( $result ) ) {
 				error_log( 'Maxima Integrations: Error guardando tienda: ' . $result->get_error_message() );
