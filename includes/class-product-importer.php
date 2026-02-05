@@ -33,13 +33,15 @@ final class Maxima_Product_Importer {
 	 * Maneja la importación server-side.
 	 */
 	public function handle_import_request() {
-		if ( ! current_user_can( 'manage_woocommerce' ) ) {
-			wp_die( esc_html__( 'No autorizado.', 'maxima-integrations' ) );
+		if ( ! current_user_can( 'manage_options' ) ) {
+			$this->store_notice( array( 'errors' => array( __( 'No autorizado.', 'maxima-integrations' ) ) ) );
+			$this->redirect_back( 0 );
 		}
 
 		$nonce = isset( $_POST['maxima_import_products_nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['maxima_import_products_nonce'] ) ) : '';
 		if ( ! wp_verify_nonce( $nonce, 'maxima_import_products' ) ) {
-			wp_die( esc_html__( 'Nonce inválido.', 'maxima-integrations' ) );
+			$this->store_notice( array( 'errors' => array( __( 'Nonce inválido.', 'maxima-integrations' ) ) ) );
+			$this->redirect_back( 0 );
 		}
 
 		$store_id = isset( $_POST['store_id'] ) ? absint( wp_unslash( $_POST['store_id'] ) ) : 0;
@@ -427,7 +429,7 @@ final class Maxima_Product_Importer {
 		if ( $store_id ) {
 			$location = add_query_arg( 'store_id', (int) $store_id, $location );
 		}
-		wp_safe_redirect( $location );
+		wp_redirect( $location );
 		exit;
 	}
 
