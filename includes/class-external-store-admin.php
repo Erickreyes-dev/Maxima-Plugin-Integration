@@ -27,22 +27,20 @@ final class Maxima_External_Store_Admin {
 		add_menu_page(
 			__( 'Máxima', 'maxima-integrations' ),
 			__( 'Máxima', 'maxima-integrations' ),
-			'edit_maxima_stores',
-			'maxima-integrations',
+			'manage_options',
+			'maxima',
 			array( $this, 'render_page' ),
 			'dashicons-store'
 		);
 
 		add_submenu_page(
-			'maxima-integrations',
-			__( 'Tiendas Externas', 'maxima-integrations' ),
-			__( 'Tiendas Externas', 'maxima-integrations' ),
-			'edit_maxima_stores',
+			'maxima',
+			__( 'Tiendas', 'maxima-integrations' ),
+			__( 'Tiendas', 'maxima-integrations' ),
+			'manage_options',
 			'maxima_tiendas',
 			array( $this, 'render_page' )
 		);
-
-		remove_submenu_page( 'maxima-integrations', 'edit.php?post_type=external_store' );
 	}
 
 	/**
@@ -79,7 +77,7 @@ final class Maxima_External_Store_Admin {
 	 * Renderiza la pantalla de tiendas externas.
 	 */
 	public function render_page() {
-		if ( ! current_user_can( 'edit_maxima_stores' ) ) {
+		if ( ! current_user_can( 'manage_options' ) ) {
 			wp_die( esc_html__( 'No autorizado.', 'maxima-integrations' ) );
 		}
 
@@ -110,10 +108,15 @@ final class Maxima_External_Store_Admin {
 		);
 		?>
 		<div class="wrap">
-			<h1><?php esc_html_e( 'Tiendas Externas', 'maxima-integrations' ); ?></h1>
+			<h1><?php esc_html_e( 'Tiendas', 'maxima-integrations' ); ?></h1>
 
 			<div class="maxima-stores-admin">
 				<h2 class="title"><?php esc_html_e( 'Listado', 'maxima-integrations' ); ?></h2>
+				<p>
+					<a class="button button-primary" href="<?php echo esc_url( admin_url( 'admin.php?page=maxima_tiendas&store_id=0' ) ); ?>">
+						<?php esc_html_e( 'Añadir tienda', 'maxima-integrations' ); ?>
+					</a>
+				</p>
 				<table class="widefat striped">
 					<thead>
 						<tr>
@@ -281,7 +284,7 @@ final class Maxima_External_Store_Admin {
 	 * Maneja el guardado de la tienda.
 	 */
 	public function handle_save_store() {
-		if ( ! current_user_can( 'edit_maxima_stores' ) ) {
+		if ( ! current_user_can( 'manage_options' ) ) {
 			wp_die( esc_html__( 'No autorizado.', 'maxima-integrations' ) );
 		}
 
@@ -295,10 +298,6 @@ final class Maxima_External_Store_Admin {
 		if ( '' === $store_name ) {
 			$this->store_notice( array( 'type' => 'error', 'message' => __( 'El nombre de la tienda es obligatorio.', 'maxima-integrations' ) ) );
 			$this->redirect_back( $store_id );
-		}
-
-		if ( $store_id && ! current_user_can( 'edit_maxima_store', $store_id ) ) {
-			wp_die( esc_html__( 'No autorizado.', 'maxima-integrations' ) );
 		}
 
 		$post_data = array(
