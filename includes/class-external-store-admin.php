@@ -285,12 +285,14 @@ final class Maxima_External_Store_Admin {
 	 */
 	public function handle_save_store() {
 		if ( ! current_user_can( 'manage_options' ) ) {
-			wp_die( esc_html__( 'No autorizado.', 'maxima-integrations' ) );
+			$this->store_notice( array( 'type' => 'error', 'message' => __( 'No autorizado.', 'maxima-integrations' ) ) );
+			$this->redirect_back( 0 );
 		}
 
 		$nonce = isset( $_POST['maxima_save_store_nonce'] ) ? sanitize_text_field( wp_unslash( $_POST['maxima_save_store_nonce'] ) ) : '';
 		if ( ! wp_verify_nonce( $nonce, 'maxima_save_store' ) ) {
-			wp_die( esc_html__( 'Nonce inválido.', 'maxima-integrations' ) );
+			$this->store_notice( array( 'type' => 'error', 'message' => __( 'Nonce inválido.', 'maxima-integrations' ) ) );
+			$this->redirect_back( 0 );
 		}
 
 		$store_id   = isset( $_POST['store_id'] ) ? absint( wp_unslash( $_POST['store_id'] ) ) : 0;
