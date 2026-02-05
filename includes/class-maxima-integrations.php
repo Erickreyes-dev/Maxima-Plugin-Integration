@@ -53,6 +53,13 @@ final class Maxima_Integrations {
 	private $woocommerce_integration;
 
 	/**
+	 * Importador de productos externos.
+	 *
+	 * @var Maxima_Product_Importer|null
+	 */
+	private $product_importer;
+
+	/**
 	 * Obtiene la instancia única del plugin.
 	 *
 	 * @return Maxima_Integrations
@@ -77,6 +84,7 @@ final class Maxima_Integrations {
 
 		if ( class_exists( 'WooCommerce' ) ) {
 			$this->woocommerce_integration = new Maxima_WooCommerce_Integration( $this->api_client );
+			$this->product_importer        = new Maxima_Product_Importer( $this->api_client );
 		}
 	}
 

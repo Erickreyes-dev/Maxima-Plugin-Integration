@@ -111,6 +111,7 @@ final class Maxima_External_Store_Metabox {
 							<?php esc_html_e( 'Ejemplo de JSON esperado:', 'maxima-integrations' ); ?>
 						</p>
 						<pre><code>{
+  "products": "/products",
   "product": "/products/{id}",
   "stock": "/products/{id}/stock",
   "order": "/orders"
@@ -119,6 +120,20 @@ final class Maxima_External_Store_Metabox {
 				</tr>
 			</tbody>
 		</table>
+		<?php if ( 'active' === $store_status ) : ?>
+			<div class="maxima-import-products">
+				<p>
+					<button type="button" class="button button-primary" id="maxima-import-products-button" data-store-id="<?php echo esc_attr( $post->ID ); ?>">
+						<?php esc_html_e( 'Importar productos', 'maxima-integrations' ); ?>
+					</button>
+				</p>
+				<div id="maxima-import-products-results" class="notice notice-info" style="display:none;"></div>
+			</div>
+		<?php else : ?>
+			<p class="description">
+				<?php esc_html_e( 'Activa la tienda para habilitar la importación de productos.', 'maxima-integrations' ); ?>
+			</p>
+		<?php endif; ?>
 		<?php
 	}
 

@@ -62,6 +62,22 @@ final class Maxima_External_API_Client {
 	}
 
 	/**
+	 * Obtiene listado de productos externos.
+	 *
+	 * @param int   $store_id ID de la tienda.
+	 * @param array $params Parámetros de consulta.
+	 * @return array|WP_Error
+	 */
+	public function get_products( $store_id, $params = array() ) {
+		$endpoint = $this->get_endpoint( $store_id, 'products' );
+		if ( is_wp_error( $endpoint ) ) {
+			return $endpoint;
+		}
+
+		return $this->request( $store_id, 'GET', $endpoint, $params );
+	}
+
+	/**
 	 * Obtiene el endpoint configurado para una tienda.
 	 *
 	 * @param int    $store_id ID de la tienda.
