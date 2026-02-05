@@ -419,9 +419,9 @@ final class Maxima_Product_Importer {
 			'maxima_external_product_mapping',
 			array(
 				'id'                => 'id',
-				'name'              => 'name',
+				'name'              => array( 'name', 'title' ),
 				'description'       => 'description',
-				'short_description' => 'short_description',
+				'short_description' => array( 'short_description', 'description' ),
 				'price'             => 'price',
 				'image'             => 'image',
 			),
@@ -517,6 +517,7 @@ final class Maxima_Product_Importer {
 		$notice['errors_count'] = isset( $notice['errors_count'] ) ? (int) $notice['errors_count'] : count( (array) $notice['errors'] );
 		$store_id = isset( $notice['store_id'] ) ? (int) $notice['store_id'] : 0;
 		set_transient( $this->get_notice_key( $user_id, $store_id ), $notice, MINUTE_IN_SECONDS * 5 );
+		set_transient( $this->get_user_notice_key( $user_id ), $notice, MINUTE_IN_SECONDS * 5 );
 	}
 
 	/**
@@ -534,14 +535,18 @@ final class Maxima_Product_Importer {
 		if ( ! $store_id && isset( $_GET['post'] ) ) {
 			$store_id = absint( wp_unslash( $_GET['post'] ) );
 		}
-		if ( ! $store_id ) {
-			return null;
+		if ( $store_id ) {
+			$key    = $this->get_notice_key( $user_id, $store_id );
+			$notice = get_transient( $key );
+			if ( $notice ) {
+				delete_transient( $key );
+				return $notice;
+			}
 		}
 
-		$key    = $this->get_notice_key( $user_id, $store_id );
-		$notice = get_transient( $key );
+		$notice = get_transient( $this->get_user_notice_key( $user_id ) );
 		if ( $notice ) {
-			delete_transient( $key );
+			delete_transient( $this->get_user_notice_key( $user_id ) );
 			return $notice;
 		}
 
@@ -556,6 +561,16 @@ final class Maxima_Product_Importer {
 	 */
 	private function get_notice_key( $user_id, $store_id ) {
 		return sprintf( 'maxima_import_notice_%d_%d', (int) $user_id, (int) $store_id );
+	}
+
+	/**
+	 * Genera la clave del transient general para el usuario.
+	 *
+	 * @param int $user_id ID de usuario.
+	 * @return string
+	 */
+	private function get_user_notice_key( $user_id ) {
+		return sprintf( 'maxima_import_notice_user_%d', (int) $user_id );
 	}
 
 	/**
