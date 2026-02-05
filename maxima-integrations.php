@@ -42,10 +42,12 @@ function maxima_handle_import_products() {
 	$user_id  = get_current_user_id();
 	if ( $user_id ) {
 		$notice = array(
-			'type'   => 'error',
-			'errors' => array( __( 'No se pudo inicializar el importador de productos.', 'maxima-integrations' ) ),
+			'errors'       => array( __( 'No se pudo inicializar el importador de productos.', 'maxima-integrations' ) ),
+			'errors_count' => 1,
+			'store_id'     => (int) $store_id,
+			'timestamp'    => current_time( 'timestamp' ),
 		);
-		set_transient( 'maxima_import_notice_' . (int) $user_id, $notice, MINUTE_IN_SECONDS * 5 );
+		set_transient( sprintf( 'maxima_import_notice_%d_%d', (int) $user_id, (int) $store_id ), $notice, MINUTE_IN_SECONDS * 5 );
 	}
 
 	$location = add_query_arg( 'store_id', (int) $store_id, admin_url( 'admin.php?page=maxima_tiendas' ) );
