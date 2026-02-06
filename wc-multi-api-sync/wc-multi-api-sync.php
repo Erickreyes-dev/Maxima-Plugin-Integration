@@ -26,10 +26,12 @@ require_once WC_MAS_PLUGIN_DIR . 'includes/class-wc-mas-api-client.php';
 require_once WC_MAS_PLUGIN_DIR . 'includes/class-wc-mas-json-resolver.php';
 require_once WC_MAS_PLUGIN_DIR . 'includes/class-wc-mas-mapper.php';
 require_once WC_MAS_PLUGIN_DIR . 'includes/class-wc-mas-mapping-storage.php';
+require_once WC_MAS_PLUGIN_DIR . 'includes/class-wc-mas-media.php';
 require_once WC_MAS_PLUGIN_DIR . 'includes/class-wc-mas-woo-adapter.php';
 require_once WC_MAS_PLUGIN_DIR . 'includes/class-wc-mas-sync.php';
 require_once WC_MAS_PLUGIN_DIR . 'includes/class-wc-mas-admin.php';
 require_once WC_MAS_PLUGIN_DIR . 'includes/class-wc-mas-order-hooks.php';
+require_once WC_MAS_PLUGIN_DIR . 'admin/migrations.php';
 
 /**
  * Initialize plugin classes.

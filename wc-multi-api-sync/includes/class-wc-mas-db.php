@@ -30,9 +30,10 @@ class WC_MAS_DB {
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 
         $charset_collate = $this->wpdb->get_charset_collate();
-        $providers_table = $this->wpdb->prefix . 'wcmas_providers';
-        $mappings_table  = $this->wpdb->prefix . 'wcmas_mappings';
-        $logs_table      = $this->wpdb->prefix . 'wcmas_logs';
+        $providers_table    = $this->wpdb->prefix . 'wcmas_providers';
+        $mappings_table     = $this->wpdb->prefix . 'wcmas_mappings';
+        $logs_table         = $this->wpdb->prefix . 'wcmas_logs';
+        $external_map_table = $this->wpdb->prefix . 'wcmas_external_map';
 
         $sql = "CREATE TABLE {$providers_table} (
             id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -71,9 +72,91 @@ class WC_MAS_DB {
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             PRIMARY KEY  (id),
             KEY provider_id (provider_id)
+        ) {$charset_collate};
+
+        CREATE TABLE {$external_map_table} (
+            id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+            provider_id BIGINT UNSIGNED NOT NULL,
+            external_id VARCHAR(191) NOT NULL,
+            product_id BIGINT UNSIGNED DEFAULT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY  (id),
+            UNIQUE KEY provider_external_unique (provider_id, external_id)
         ) {$charset_collate};";
 
         dbDelta( $sql );
+    }
+
+    public function external_map_table_exists() {
+        $table = $this->wpdb->prefix . 'wcmas_external_map';
+        $result = $this->wpdb->get_var( $this->wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) );
+        return $result === $table;
+    }
+
+    public function get_external_product_id( $provider_id, $external_id ) {
+        if ( ! $this->external_map_table_exists() ) {
+            return null;
+        }
+        $table = $this->wpdb->prefix . 'wcmas_external_map';
+        return $this->wpdb->get_var(
+            $this->wpdb->prepare(
+                "SELECT product_id FROM {$table} WHERE provider_id = %d AND external_id = %s LIMIT 1",
+                $provider_id,
+                (string) $external_id
+            )
+        );
+    }
+
+    public function upsert_external_map( $provider_id, $external_id, $product_id ) {
+        if ( ! $this->external_map_table_exists() ) {
+            return array(
+                'status' => 'skipped',
+            );
+        }
+
+        $table = $this->wpdb->prefix . 'wcmas_external_map';
+        $inserted = $this->wpdb->insert(
+            $table,
+            array(
+                'provider_id' => $provider_id,
+                'external_id' => (string) $external_id,
+                'product_id' => $product_id,
+            ),
+            array( '%d', '%s', '%d' )
+        );
+
+        if ( false !== $inserted ) {
+            return array(
+                'status' => 'inserted',
+            );
+        }
+
+        if ( $this->wpdb->last_error && false !== stripos( $this->wpdb->last_error, 'duplicate' ) ) {
+            $existing_id = $this->get_external_product_id( $provider_id, $external_id );
+            if ( $existing_id && (int) $existing_id !== (int) $product_id ) {
+                $this->wpdb->update(
+                    $table,
+                    array( 'product_id' => $product_id ),
+                    array(
+                        'provider_id' => $provider_id,
+                        'external_id' => (string) $external_id,
+                    ),
+                    array( '%d' ),
+                    array( '%d', '%s' )
+                );
+            }
+
+            return array(
+                'status' => 'race',
+                'existing_id' => $existing_id,
+            );
+        }
+
+        return array(
+            'status' => 'error',
+            'error' => $this->wpdb->last_error,
+        );
     }
 
     public function get_providers( $only_active = false ) {

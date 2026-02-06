@@ -231,8 +231,53 @@ class WC_MAS_Sync {
                     continue;
                 }
 
+                $external_id = $payload['id'] ?? ( $mapped['external_id'] ?? null );
+                $this->logger->info(
+                    'Resolved external_id',
+                    $provider_id,
+                    array_merge( $context, array( 'external_id' => $external_id ) )
+                );
+
+                $product_id = null;
+                if ( ! empty( $external_id ) ) {
+                    $product_id = $this->db->get_external_product_id( $provider_id, $external_id );
+                }
+
+                if ( ! $product_id && ! empty( $external_id ) ) {
+                    $existing = get_posts(
+                        array(
+                            'post_type' => 'product',
+                            'meta_query' => array(
+                                array(
+                                    'key' => '_external_provider_id',
+                                    'value' => $provider_id,
+                                ),
+                                array(
+                                    'key' => '_external_product_id',
+                                    'value' => (string) $external_id,
+                                ),
+                            ),
+                            'posts_per_page' => 1,
+                            'fields' => 'ids',
+                        )
+                    );
+                    $product_id = $existing ? $existing[0] : null;
+                }
+
+                $this->logger->info(
+                    'Lookup result',
+                    $provider_id,
+                    array_merge(
+                        $context,
+                        array(
+                            'product_id' => $product_id,
+                            'external_id' => $external_id,
+                        )
+                    )
+                );
+
                 $this->logger->info( 'Before product creation', $provider_id, $context );
-                $result = $this->woo_adapter->create_or_update_product_by_sku( $mapped, $payload, $provider_id );
+                $result = $this->woo_adapter->create_or_update_product( $mapped, $payload, $provider_id, $product_id );
                 $product_id = $result['product_id'] ?? null;
                 $action = $result['action'] ?? null;
                 $this->logger->info(
@@ -272,7 +317,7 @@ class WC_MAS_Sync {
             $page++;
         } while ( $page <= $total_pages );
 
-        $this->logger->info( 'Sync completed.', $provider_id, $totals );
+        $this->logger->info( wp_json_encode( $totals ), $provider_id );
         if ( 0 === $totals['created'] ) {
             $this->logger->warning(
                 'Sync finished but no products were created',
