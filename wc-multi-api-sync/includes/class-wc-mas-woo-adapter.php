@@ -131,7 +131,7 @@ class WC_MAS_Woo_Adapter {
         update_post_meta( $product_id, '_external_product_id', $external_id );
 
         if ( ! empty( $mapped['images'] ) && is_array( $mapped['images'] ) ) {
-            $this->attach_images( $product_id, $mapped['images'] );
+            $this->attach_images( $product_id, $mapped['images'], $provider_id );
         }
 
         if ( ! empty( $mapped['categories'] ) && is_array( $mapped['categories'] ) ) {
@@ -163,23 +163,54 @@ class WC_MAS_Woo_Adapter {
         );
     }
 
-    private function attach_images( $product_id, $images ) {
+    private function attach_images( $product_id, $images, $provider_id = null ) {
         $attachment_ids = array();
         foreach ( $images as $image_url ) {
-            $existing = $this->get_attachment_by_url( $image_url );
-            if ( $existing ) {
-                $attachment_ids[] = $existing;
+            if ( empty( $image_url ) ) {
                 continue;
             }
-            $attachment_id = $this->sideload_image( $image_url, $product_id );
+
+            $image_hash = md5( $image_url );
+            $existing = $this->get_attachment_by_hash( $image_hash );
+            if ( ! $existing ) {
+                $existing = $this->get_attachment_by_url( $image_url );
+            }
+            if ( $existing ) {
+                $attachment_ids[] = $existing;
+                $this->logger->info(
+                    'Image processed',
+                    $provider_id,
+                    array(
+                        'product_id' => $product_id,
+                        'attachment_id' => $existing,
+                        'url' => $image_url,
+                        'source' => 'existing',
+                    )
+                );
+                continue;
+            }
+
+            $attachment_id = $this->sideload_image( $image_url, $product_id, $provider_id );
             if ( $attachment_id ) {
+                update_post_meta( $attachment_id, '_external_image_hash', $image_hash );
                 $attachment_ids[] = $attachment_id;
             }
+
+            $this->logger->info(
+                'Image processed',
+                $provider_id,
+                array(
+                    'product_id' => $product_id,
+                    'attachment_id' => $attachment_id ?? null,
+                    'url' => $image_url,
+                )
+            );
         }
 
         if ( $attachment_ids ) {
             set_post_thumbnail( $product_id, $attachment_ids[0] );
             update_post_meta( $product_id, '_product_image_gallery', implode( ',', array_slice( $attachment_ids, 1 ) ) );
+            update_post_meta( $product_id, '_external_image_url', $images[0] );
         }
     }
 
@@ -188,13 +219,36 @@ class WC_MAS_Woo_Adapter {
         return $wpdb->get_var( $wpdb->prepare( "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = '_wcmas_source_url' AND meta_value = %s LIMIT 1", $url ) );
     }
 
-    private function sideload_image( $url, $product_id ) {
+    private function get_attachment_by_hash( $image_hash ) {
+        $existing = get_posts(
+            array(
+                'post_type' => 'attachment',
+                'meta_key' => '_external_image_hash',
+                'meta_value' => $image_hash,
+                'numberposts' => 1,
+            )
+        );
+        if ( $existing ) {
+            return $existing[0]->ID;
+        }
+        return null;
+    }
+
+    private function sideload_image( $url, $product_id, $provider_id = null ) {
         require_once ABSPATH . 'wp-admin/includes/media.php';
         require_once ABSPATH . 'wp-admin/includes/file.php';
         require_once ABSPATH . 'wp-admin/includes/image.php';
 
         $attachment_id = media_sideload_image( $url, $product_id, null, 'id' );
         if ( is_wp_error( $attachment_id ) ) {
+            $this->logger->error(
+                'Image download failed',
+                $provider_id,
+                array(
+                    'url' => $url,
+                    'error' => $attachment_id->get_error_message(),
+                )
+            );
             return null;
         }
         update_post_meta( $attachment_id, '_wcmas_source_url', esc_url_raw( $url ) );
