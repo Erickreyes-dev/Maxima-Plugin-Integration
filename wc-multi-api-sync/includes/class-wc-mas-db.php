@@ -125,6 +125,11 @@ class WC_MAS_DB {
         return (int) $this->wpdb->insert_id;
     }
 
+    public function delete_mapping( $mapping_id ) {
+        $table = $this->wpdb->prefix . 'wcmas_mappings';
+        return $this->wpdb->delete( $table, array( 'id' => $mapping_id ) );
+    }
+
     public function insert_log( $data ) {
         $table = $this->wpdb->prefix . 'wcmas_logs';
         $this->wpdb->insert( $table, $data );
