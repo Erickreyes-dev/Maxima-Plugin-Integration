@@ -316,6 +316,20 @@ class WC_MAS_Sync {
             return;
         }
 
+        $items_count = 0;
+        if ( isset( $payload['items'] ) && is_array( $payload['items'] ) ) {
+            $items_count = count( $payload['items'] );
+        }
+
+        $this->logger->log(
+            'info',
+            'External order notified',
+            $provider_id,
+            array(
+                'order_id' => $payload['order_id'] ?? null,
+                'items' => $items_count,
+            )
+        );
         $this->logger->log( 'info', 'Notification sent.', $provider_id, array( 'payload' => $payload ) );
     }
 
