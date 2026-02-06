@@ -18,19 +18,25 @@ class WC_MAS_Woo_Adapter {
      * Create or update WooCommerce product by SKU.
      */
     public function create_or_update_product_by_sku( $mapped, $payload, $provider_id ) {
-        $context = array(
-            'provider_id' => $provider_id,
-            'sku' => $mapped['sku'] ?? null,
-            'external_id' => $payload['id'] ?? null,
-        );
-
-        if ( empty( $mapped['sku'] ) ) {
-            $this->logger->warning( 'Skipping product: SKU empty', $provider_id, $context );
-            return array(
-                'action' => 'skipped',
-                'product_id' => null,
+        $external_id = $payload['id'] ?? null;
+        $sku = $mapped['sku'] ?? null;
+        if ( empty( $sku ) && ! empty( $external_id ) ) {
+            $sku = 'ext-' . $provider_id . '-' . $external_id;
+            $this->logger->info(
+                'Generated SKU from external_id',
+                $provider_id,
+                array(
+                    'sku' => $sku,
+                    'external_id' => $external_id,
+                )
             );
         }
+
+        $context = array(
+            'provider_id' => $provider_id,
+            'sku' => $sku,
+            'external_id' => $external_id,
+        );
 
         if ( empty( $mapped['title'] ) ) {
             $this->logger->warning( 'Skipping product: title empty', $provider_id, $context );
@@ -40,7 +46,7 @@ class WC_MAS_Woo_Adapter {
             );
         }
 
-        $product_id = wc_get_product_id_by_sku( $mapped['sku'] );
+        $product_id = ! empty( $sku ) ? wc_get_product_id_by_sku( $sku ) : 0;
         $has_variations = ! empty( $mapped['variations'] ) && is_array( $mapped['variations'] );
         $is_update = (bool) $product_id;
         $product = $product_id ? wc_get_product( $product_id ) : ( $has_variations ? new WC_Product_Variable() : new WC_Product_Simple() );
@@ -62,7 +68,9 @@ class WC_MAS_Woo_Adapter {
         if ( isset( $mapped['description'] ) ) {
             $product->set_description( $mapped['description'] );
         }
-        $product->set_sku( $mapped['sku'] );
+        if ( ! empty( $sku ) ) {
+            $product->set_sku( $sku );
+        }
 
         if ( isset( $mapped['regular_price'] ) ) {
             $product->set_regular_price( $mapped['regular_price'] );
@@ -86,8 +94,14 @@ class WC_MAS_Woo_Adapter {
 
         $product_id = $product->save();
         if ( ! $product_id ) {
-            $this->logger->error( 'Product save returned empty ID', $provider_id, $context );
-            $this->logger->warning( 'Skipping product: save did not return ID', $provider_id, $context );
+            $this->logger->error(
+                'Product creation failed',
+                $provider_id,
+                array(
+                    'mapped' => $mapped,
+                    'external_id' => $external_id,
+                )
+            );
             return array(
                 'action' => 'error',
                 'product_id' => null,
@@ -113,10 +127,8 @@ class WC_MAS_Woo_Adapter {
             }
         }
 
-        update_post_meta( $product_id, '_wcmas_provider_id', $provider_id );
-        if ( isset( $payload['id'] ) ) {
-            update_post_meta( $product_id, '_wcmas_external_id', sanitize_text_field( $payload['id'] ) );
-        }
+        update_post_meta( $product_id, '_external_provider_id', $provider_id );
+        update_post_meta( $product_id, '_external_product_id', $external_id );
 
         if ( ! empty( $mapped['images'] ) && is_array( $mapped['images'] ) ) {
             $this->attach_images( $product_id, $mapped['images'] );
@@ -135,6 +147,15 @@ class WC_MAS_Woo_Adapter {
         }
 
         do_action( 'wc_mas_post_product_save', $product_id, $mapped, $payload, $provider_id );
+
+        $this->logger->info(
+            'Product created successfully',
+            $provider_id,
+            array(
+                'product_id' => $product_id,
+                'external_id' => $external_id,
+            )
+        );
 
         return array(
             'action' => $is_update ? 'updated' : 'created',
