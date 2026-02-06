@@ -11,6 +11,8 @@ class WC_MAS_Admin {
     private static $instance;
     private $db;
     private $logger;
+    private $mapping_storage;
+    private $resolver;
 
     public static function get_instance() {
         if ( null === self::$instance ) {
@@ -22,11 +24,15 @@ class WC_MAS_Admin {
     private function __construct() {
         $this->db = WC_MAS_DB::get_instance();
         $this->logger = WC_MAS_Logger::get_instance();
+        $this->mapping_storage = new WC_MAS_Mapping_Storage();
+        $this->resolver = new WC_MAS_JSON_Resolver();
 
         add_action( 'admin_menu', array( $this, 'register_menu' ) );
         add_action( 'admin_enqueue_scripts', array( $this, 'enqueue_assets' ) );
         add_action( 'wp_ajax_wc_mas_test_endpoint', array( $this, 'ajax_test_endpoint' ) );
         add_action( 'wp_ajax_wc_mas_preview_mapping', array( $this, 'ajax_preview_mapping' ) );
+        add_action( 'wp_ajax_wc_mas_get_json_paths', array( $this, 'ajax_get_json_paths' ) );
+        add_action( 'wp_ajax_wc_mas_delete_mapping', array( $this, 'ajax_delete_mapping' ) );
     }
 
     public function register_menu() {
@@ -79,6 +85,7 @@ class WC_MAS_Admin {
             array(
                 'nonce' => wp_create_nonce( 'wc_mas_admin_nonce' ),
                 'ajaxUrl' => admin_url( 'admin-ajax.php' ),
+                'wooFields' => $this->get_woo_fields(),
             )
         );
     }
@@ -101,7 +108,7 @@ class WC_MAS_Admin {
         $this->handle_mapping_form();
         $provider_id = isset( $_GET['provider_id'] ) ? (int) $_GET['provider_id'] : 0;
         $providers = $this->db->get_providers();
-        $mappings = $provider_id ? $this->db->get_mappings( $provider_id ) : array();
+        $mappings = $provider_id ? $this->mapping_storage->get_mappings( $provider_id ) : array();
         include WC_MAS_PLUGIN_DIR . 'templates/mappings-page.php';
     }
 
@@ -183,12 +190,18 @@ class WC_MAS_Admin {
             if ( ! is_array( $mapping ) ) {
                 $mapping = array();
             }
+            $mapping_name = sanitize_text_field( wp_unslash( $_POST['mapping_name'] ) );
+            $validated_mapping = $this->validate_mapping( $provider_id, $mapping );
+            if ( ! $mapping_name || ! $validated_mapping ) {
+                $this->logger->log( 'error', 'Mapping validation failed.', $provider_id );
+                return;
+            }
             $data = array(
                 'provider_id' => $provider_id,
-                'name' => sanitize_text_field( wp_unslash( $_POST['mapping_name'] ) ),
-                'mapping_json' => wp_json_encode( $mapping ),
+                'name' => $mapping_name,
+                'mapping_json' => wp_json_encode( $validated_mapping ),
             );
-            $this->db->upsert_mapping( $data, isset( $_POST['mapping_id'] ) ? (int) $_POST['mapping_id'] : null );
+            $this->mapping_storage->upsert_mapping( $data, isset( $_POST['mapping_id'] ) ? (int) $_POST['mapping_id'] : null );
             $this->logger->log( 'info', 'Mapping saved.', $provider_id );
         }
 
@@ -241,6 +254,48 @@ class WC_MAS_Admin {
         wp_send_json_success( array( 'mapped' => $result ) );
     }
 
+    public function ajax_get_json_paths() {
+        check_ajax_referer( 'wc_mas_admin_nonce', 'nonce' );
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( array( 'message' => __( 'Unauthorized.', 'wc-multi-api-sync' ) ) );
+        }
+
+        $provider_id = (int) $_POST['provider_id'];
+        $provider = $this->db->get_provider( $provider_id );
+        if ( ! $provider ) {
+            wp_send_json_error( array( 'message' => __( 'Provider not found.', 'wc-multi-api-sync' ) ) );
+        }
+
+        $paths_data = $this->get_available_paths( $provider );
+        if ( isset( $paths_data['error'] ) ) {
+            wp_send_json_error( array( 'message' => $paths_data['error'] ) );
+        }
+
+        wp_send_json_success(
+            array(
+                'paths' => $paths_data['paths'],
+                'sample' => wp_json_encode( $paths_data['sample'], JSON_PRETTY_PRINT ),
+            )
+        );
+    }
+
+    public function ajax_delete_mapping() {
+        check_ajax_referer( 'wc_mas_admin_nonce', 'nonce' );
+        if ( ! current_user_can( 'manage_woocommerce' ) ) {
+            wp_send_json_error( array( 'message' => __( 'Unauthorized.', 'wc-multi-api-sync' ) ) );
+        }
+
+        $mapping_id = (int) $_POST['mapping_id'];
+        $mapping = $this->mapping_storage->get_mapping( $mapping_id );
+        if ( ! $mapping ) {
+            wp_send_json_error( array( 'message' => __( 'Mapping not found.', 'wc-multi-api-sync' ) ) );
+        }
+
+        $this->mapping_storage->delete_mapping( $mapping_id );
+        $this->logger->log( 'info', 'Mapping deleted.', (int) $mapping['provider_id'] );
+        wp_send_json_success();
+    }
+
     private function parse_kv_pairs( $text ) {
         $lines = array_filter( array_map( 'trim', explode( "\n", $text ) ) );
         $pairs = array();
@@ -270,5 +325,83 @@ class WC_MAS_Admin {
             return $endpoint;
         }
         return trailingslashit( $base_url ) . ltrim( $endpoint, '/' );
+    }
+
+    private function get_woo_fields() {
+        return array(
+            'title',
+            'description',
+            'short_description',
+            'sku',
+            'regular_price',
+            'sale_price',
+            'stock',
+            'images',
+            'categories',
+            'attributes',
+            'meta_data',
+        );
+    }
+
+    private function validate_mapping( $provider_id, $mapping ) {
+        $provider = $this->db->get_provider( $provider_id );
+        if ( ! $provider ) {
+            return array();
+        }
+
+        $paths_data = $this->get_available_paths( $provider );
+        if ( isset( $paths_data['error'] ) ) {
+            return array();
+        }
+
+        $allowed_fields = $this->get_woo_fields();
+        $available_paths = $paths_data['paths'];
+        $validated = array();
+
+        foreach ( $mapping as $woo_field => $path ) {
+            $woo_field = sanitize_text_field( $woo_field );
+            if ( is_array( $path ) && isset( $path['path'] ) ) {
+                $path = $path['path'];
+            }
+            $path = sanitize_text_field( $path );
+            if ( ! $woo_field || ! $path ) {
+                continue;
+            }
+            if ( ! in_array( $woo_field, $allowed_fields, true ) ) {
+                continue;
+            }
+            if ( ! in_array( $path, $available_paths, true ) ) {
+                continue;
+            }
+            $validated[ $woo_field ] = $path;
+        }
+
+        return $validated;
+    }
+
+    private function get_available_paths( $provider ) {
+        $client = new WC_MAS_API_Client( $provider, get_option( 'wc_mas_settings', array() ) );
+        $params = $provider['default_params'] ? json_decode( $provider['default_params'], true ) : array();
+        $url = $this->resolve_url( $provider['base_url'], $provider['products_endpoint'] );
+        $response = $client->paginate( $url, $params, 1, 1 );
+        if ( is_wp_error( $response ) ) {
+            return array( 'error' => $response->get_error_message() );
+        }
+
+        $body = $this->resolver->decode_body( wp_remote_retrieve_body( $response ) );
+        if ( ! $body ) {
+            return array( 'error' => __( 'Invalid JSON response.', 'wc-multi-api-sync' ) );
+        }
+
+        $sample = $this->resolver->extract_sample_product( $body );
+        if ( ! $sample ) {
+            return array( 'error' => __( 'No products found in response.', 'wc-multi-api-sync' ) );
+        }
+
+        $paths = $this->resolver->flatten_paths( $sample );
+        return array(
+            'paths' => $paths,
+            'sample' => $sample,
+        );
     }
 }

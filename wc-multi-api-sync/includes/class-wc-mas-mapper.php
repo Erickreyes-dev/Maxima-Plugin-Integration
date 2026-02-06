@@ -94,11 +94,23 @@ class WC_MAS_Mapper {
         $mapping = apply_filters( 'wc_mas_pre_map_product', $mapping, $provider_id );
 
         foreach ( $mapping as $key => $config ) {
-            if ( ! isset( $config['path'] ) ) {
+            $path = null;
+            if ( is_string( $config ) ) {
+                $path = $config;
+                $config = array( 'path' => $config );
+            } elseif ( is_array( $config ) && isset( $config['path'] ) ) {
+                $path = $config['path'];
+            }
+
+            if ( ! $path ) {
                 continue;
             }
-            $value = $this->get_value_from_path( $payload, $config['path'] );
+
+            $value = $this->get_value_from_path( $payload, $path );
             $value = $this->apply_transformations( $value, $config, $provider_id );
+            if ( null === $value ) {
+                continue;
+            }
             $mapped[ $key ] = $value;
         }
 
