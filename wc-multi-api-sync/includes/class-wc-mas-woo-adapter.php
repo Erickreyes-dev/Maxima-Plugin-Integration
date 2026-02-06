@@ -8,17 +8,50 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 class WC_MAS_Woo_Adapter {
+    private $logger;
+
+    public function __construct() {
+        $this->logger = WC_MAS_Logger::get_instance();
+    }
+
     /**
      * Create or update WooCommerce product by SKU.
      */
     public function create_or_update_product_by_sku( $mapped, $payload, $provider_id ) {
+        $context = array(
+            'provider_id' => $provider_id,
+            'sku' => $mapped['sku'] ?? null,
+            'external_id' => $payload['id'] ?? null,
+        );
+
         if ( empty( $mapped['sku'] ) ) {
-            return;
+            $this->logger->warning( 'Skipping product: SKU empty', $provider_id, $context );
+            return array(
+                'action' => 'skipped',
+                'product_id' => null,
+            );
+        }
+
+        if ( empty( $mapped['title'] ) ) {
+            $this->logger->warning( 'Skipping product: title empty', $provider_id, $context );
+            return array(
+                'action' => 'skipped',
+                'product_id' => null,
+            );
         }
 
         $product_id = wc_get_product_id_by_sku( $mapped['sku'] );
         $has_variations = ! empty( $mapped['variations'] ) && is_array( $mapped['variations'] );
-        $product = $product_id ? wc_get_product( $product_id ) : ( $has_variations ? new WC_Product_Variable() : new WC_Product() );
+        $is_update = (bool) $product_id;
+        $product = $product_id ? wc_get_product( $product_id ) : ( $has_variations ? new WC_Product_Variable() : new WC_Product_Simple() );
+        if ( ! $product ) {
+            $this->logger->error( 'Product load failed before save', $provider_id, $context );
+            $this->logger->warning( 'Skipping product: unable to initialize product object', $provider_id, $context );
+            return array(
+                'action' => 'error',
+                'product_id' => null,
+            );
+        }
 
         if ( isset( $mapped['title'] ) ) {
             $product->set_name( $mapped['title'] );
@@ -48,7 +81,38 @@ class WC_MAS_Woo_Adapter {
             $product->set_dimensions( $mapped['dimensions'] );
         }
 
+        $product->set_status( 'publish' );
+        $product->set_catalog_visibility( 'visible' );
+
         $product_id = $product->save();
+        if ( ! $product_id ) {
+            $this->logger->error( 'Product save returned empty ID', $provider_id, $context );
+            $this->logger->warning( 'Skipping product: save did not return ID', $provider_id, $context );
+            return array(
+                'action' => 'error',
+                'product_id' => null,
+            );
+        }
+
+        $product = wc_get_product( $product_id );
+        if ( $product ) {
+            $this->logger->info(
+                'Product status set',
+                $provider_id,
+                array(
+                    'product_id' => $product_id,
+                    'status' => $product->get_status(),
+                )
+            );
+        }
+
+        if ( ! $has_variations ) {
+            $result = wp_set_object_terms( $product_id, 'simple', 'product_type' );
+            if ( is_wp_error( $result ) ) {
+                $this->logger->error( 'Failed to set product type', $provider_id, array_merge( $context, array( 'error' => $result->get_error_message() ) ) );
+            }
+        }
+
         update_post_meta( $product_id, '_wcmas_provider_id', $provider_id );
         if ( isset( $payload['id'] ) ) {
             update_post_meta( $product_id, '_wcmas_external_id', sanitize_text_field( $payload['id'] ) );
@@ -67,10 +131,15 @@ class WC_MAS_Woo_Adapter {
         }
 
         if ( $has_variations ) {
-            $this->set_variable_product( $product_id, $mapped['variations'], $mapped['attributes'] ?? array() );
+            $this->set_variable_product( $product_id, $mapped['variations'], $mapped['attributes'] ?? array(), $context );
         }
 
         do_action( 'wc_mas_post_product_save', $product_id, $mapped, $payload, $provider_id );
+
+        return array(
+            'action' => $is_update ? 'updated' : 'created',
+            'product_id' => $product_id,
+        );
     }
 
     private function attach_images( $product_id, $images ) {
@@ -151,8 +220,11 @@ class WC_MAS_Woo_Adapter {
         update_post_meta( $product_id, '_product_attributes', $product_attributes );
     }
 
-    private function set_variable_product( $product_id, $variations, $attributes ) {
-        wp_set_object_terms( $product_id, 'variable', 'product_type' );
+    private function set_variable_product( $product_id, $variations, $attributes, $context = array() ) {
+        $result = wp_set_object_terms( $product_id, 'variable', 'product_type' );
+        if ( is_wp_error( $result ) ) {
+            $this->logger->error( 'Failed to set product type', $context['provider_id'] ?? null, array_merge( $context, array( 'error' => $result->get_error_message() ) ) );
+        }
         $parent = wc_get_product( $product_id );
         if ( ! $parent || ! $parent instanceof WC_Product_Variable ) {
             $parent = new WC_Product_Variable( $product_id );
@@ -160,6 +232,7 @@ class WC_MAS_Woo_Adapter {
 
         foreach ( $variations as $variation_data ) {
             if ( empty( $variation_data['sku'] ) ) {
+                $this->logger->warning( 'Skipping variation: SKU empty', $context['provider_id'] ?? null, $context );
                 continue;
             }
             $variation_id = wc_get_product_id_by_sku( $variation_data['sku'] );
