@@ -1,0 +1,11 @@
+.wc-mas-admin pre {
+  background: #f6f7f7;
+  padding: 12px;
+  border: 1px solid #ccd0d4;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.wc-mas-form {
+  margin-bottom: 20px;
+}
