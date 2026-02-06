@@ -9,16 +9,24 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class WC_MAS_Woo_Adapter {
     private $logger;
+    private $db;
+    private $media;
 
     public function __construct() {
         $this->logger = WC_MAS_Logger::get_instance();
+        $this->db = WC_MAS_DB::get_instance();
+        $this->media = new WC_MAS_Media();
     }
 
     /**
-     * Create or update WooCommerce product by SKU.
+     * Create or update WooCommerce product by external identifiers.
      */
     public function create_or_update_product_by_sku( $mapped, $payload, $provider_id ) {
-        $external_id = $payload['id'] ?? null;
+        return $this->create_or_update_product( $mapped, $payload, $provider_id );
+    }
+
+    public function create_or_update_product( $mapped, $payload, $provider_id, $product_id = null ) {
+        $external_id = $payload['id'] ?? ( $mapped['external_id'] ?? null );
         $sku = $mapped['sku'] ?? null;
         if ( empty( $sku ) && ! empty( $external_id ) ) {
             $sku = 'ext-' . $provider_id . '-' . $external_id;
@@ -46,7 +54,10 @@ class WC_MAS_Woo_Adapter {
             );
         }
 
-        $product_id = ! empty( $sku ) ? wc_get_product_id_by_sku( $sku ) : 0;
+        $product_id = $product_id ? (int) $product_id : 0;
+        if ( ! $product_id && ! empty( $sku ) ) {
+            $product_id = wc_get_product_id_by_sku( $sku );
+        }
         $has_variations = ! empty( $mapped['variations'] ) && is_array( $mapped['variations'] );
         $is_update = (bool) $product_id;
         $product = $product_id ? wc_get_product( $product_id ) : ( $has_variations ? new WC_Product_Variable() : new WC_Product_Simple() );
@@ -59,38 +70,62 @@ class WC_MAS_Woo_Adapter {
             );
         }
 
-        if ( isset( $mapped['title'] ) ) {
+        $changes = array();
+
+        if ( isset( $mapped['title'] ) && $mapped['title'] !== $product->get_name() ) {
+            $changes['title'] = array( 'from' => $product->get_name(), 'to' => $mapped['title'] );
             $product->set_name( $mapped['title'] );
         }
-        if ( isset( $mapped['short_description'] ) ) {
+        if ( isset( $mapped['short_description'] ) && $mapped['short_description'] !== $product->get_short_description() ) {
+            $changes['short_description'] = array( 'from' => $product->get_short_description(), 'to' => $mapped['short_description'] );
             $product->set_short_description( $mapped['short_description'] );
         }
-        if ( isset( $mapped['description'] ) ) {
+        if ( isset( $mapped['description'] ) && $mapped['description'] !== $product->get_description() ) {
+            $changes['description'] = array( 'from' => $product->get_description(), 'to' => $mapped['description'] );
             $product->set_description( $mapped['description'] );
         }
+
         if ( ! empty( $sku ) ) {
-            $product->set_sku( $sku );
+            $sku = $this->resolve_unique_sku( $sku, $product_id, $provider_id, $external_id );
+            if ( $sku && $sku !== $product->get_sku() ) {
+                $changes['sku'] = array( 'from' => $product->get_sku(), 'to' => $sku );
+                $product->set_sku( $sku );
+            }
         }
 
-        if ( isset( $mapped['regular_price'] ) ) {
-            $product->set_regular_price( $mapped['regular_price'] );
+        if ( isset( $mapped['regular_price'] ) && (string) $mapped['regular_price'] !== (string) $product->get_regular_price() ) {
+            $changes['regular_price'] = array( 'from' => $product->get_regular_price(), 'to' => (string) $mapped['regular_price'] );
+            $product->set_regular_price( (string) $mapped['regular_price'] );
         }
-        if ( isset( $mapped['sale_price'] ) ) {
-            $product->set_sale_price( $mapped['sale_price'] );
+        if ( isset( $mapped['sale_price'] ) && (string) $mapped['sale_price'] !== (string) $product->get_sale_price() ) {
+            $changes['sale_price'] = array( 'from' => $product->get_sale_price(), 'to' => (string) $mapped['sale_price'] );
+            $product->set_sale_price( (string) $mapped['sale_price'] );
         }
-        if ( isset( $mapped['stock'] ) ) {
+        if ( isset( $mapped['stock'] ) && (int) $mapped['stock'] !== (int) $product->get_stock_quantity() ) {
+            $changes['stock'] = array( 'from' => $product->get_stock_quantity(), 'to' => (int) $mapped['stock'] );
             $product->set_manage_stock( true );
             $product->set_stock_quantity( (int) $mapped['stock'] );
         }
-        if ( isset( $mapped['weight'] ) ) {
+        if ( isset( $mapped['weight'] ) && (string) $mapped['weight'] !== (string) $product->get_weight() ) {
+            $changes['weight'] = array( 'from' => $product->get_weight(), 'to' => (string) $mapped['weight'] );
             $product->set_weight( $mapped['weight'] );
         }
         if ( isset( $mapped['dimensions'] ) && is_array( $mapped['dimensions'] ) ) {
-            $product->set_dimensions( $mapped['dimensions'] );
+            $existing_dimensions = $product->get_dimensions( false );
+            if ( $existing_dimensions !== $mapped['dimensions'] ) {
+                $changes['dimensions'] = array( 'from' => $existing_dimensions, 'to' => $mapped['dimensions'] );
+                $product->set_dimensions( $mapped['dimensions'] );
+            }
         }
 
-        $product->set_status( 'publish' );
-        $product->set_catalog_visibility( 'visible' );
+        if ( 'publish' !== $product->get_status() ) {
+            $changes['status'] = array( 'from' => $product->get_status(), 'to' => 'publish' );
+            $product->set_status( 'publish' );
+        }
+        if ( 'visible' !== $product->get_catalog_visibility() ) {
+            $changes['catalog_visibility'] = array( 'from' => $product->get_catalog_visibility(), 'to' => 'visible' );
+            $product->set_catalog_visibility( 'visible' );
+        }
 
         $product_id = $product->save();
         if ( ! $product_id ) {
@@ -128,18 +163,68 @@ class WC_MAS_Woo_Adapter {
         }
 
         update_post_meta( $product_id, '_external_provider_id', $provider_id );
-        update_post_meta( $product_id, '_external_product_id', $external_id );
+        update_post_meta( $product_id, '_external_product_id', (string) $external_id );
+
+        if ( ! empty( $external_id ) ) {
+            $map_result = $this->db->upsert_external_map( $provider_id, $external_id, $product_id );
+            if ( 'race' === $map_result['status'] ) {
+                $this->logger->warning(
+                    'External map insert race handled',
+                    $provider_id,
+                    array_merge(
+                        $context,
+                        array(
+                            'product_id' => $product_id,
+                            'existing_id' => $map_result['existing_id'] ?? null,
+                        )
+                    )
+                );
+            } elseif ( 'error' === $map_result['status'] ) {
+                $this->logger->error(
+                    'External map update failed',
+                    $provider_id,
+                    array_merge(
+                        $context,
+                        array(
+                            'product_id' => $product_id,
+                            'error' => $map_result['error'] ?? null,
+                        )
+                    )
+                );
+            }
+        } else {
+            $this->logger->warning(
+                'External ID missing; external map update skipped',
+                $provider_id,
+                array_merge( $context, array( 'product_id' => $product_id ) )
+            );
+        }
 
         if ( ! empty( $mapped['images'] ) && is_array( $mapped['images'] ) ) {
-            $this->attach_images( $product_id, $mapped['images'], $provider_id );
+            $image_result = $this->media->sync_product_images( $product_id, $mapped['images'], $context );
+            if ( $image_result['updated'] ) {
+                $changes['images'] = array(
+                    'count' => count( $image_result['attachment_ids'] ),
+                );
+            }
         }
 
         if ( ! empty( $mapped['categories'] ) && is_array( $mapped['categories'] ) ) {
-            wp_set_object_terms( $product_id, $mapped['categories'], 'product_cat', false );
+            $existing_terms = wp_get_object_terms( $product_id, 'product_cat', array( 'fields' => 'names' ) );
+            $mapped_categories = array_values( array_unique( $mapped['categories'] ) );
+            sort( $existing_terms );
+            sort( $mapped_categories );
+            if ( $existing_terms !== $mapped_categories ) {
+                wp_set_object_terms( $product_id, $mapped['categories'], 'product_cat', false );
+                $changes['categories'] = array( 'from' => $existing_terms, 'to' => $mapped_categories );
+            }
         }
 
         if ( ! empty( $mapped['attributes'] ) && is_array( $mapped['attributes'] ) ) {
-            $this->set_product_attributes( $product_id, $mapped['attributes'] );
+            $attributes_updated = $this->set_product_attributes( $product_id, $mapped['attributes'] );
+            if ( $attributes_updated ) {
+                $changes['attributes'] = array( 'updated' => true );
+            }
         }
 
         if ( $has_variations ) {
@@ -148,111 +233,79 @@ class WC_MAS_Woo_Adapter {
 
         do_action( 'wc_mas_post_product_save', $product_id, $mapped, $payload, $provider_id );
 
+        $action = $is_update ? ( empty( $changes ) ? 'skipped' : 'updated' ) : 'created';
+        $log_message = 'Product created';
+        if ( 'updated' === $action ) {
+            $log_message = 'Product updated';
+        } elseif ( 'skipped' === $action ) {
+            $log_message = 'Product skipped (no changes)';
+        }
+
         $this->logger->info(
-            'Product created successfully',
+            $log_message,
             $provider_id,
             array(
                 'product_id' => $product_id,
                 'external_id' => $external_id,
+                'changes' => $changes,
             )
         );
 
         return array(
-            'action' => $is_update ? 'updated' : 'created',
+            'action' => $action,
             'product_id' => $product_id,
+            'changes' => $changes,
         );
     }
 
-    private function attach_images( $product_id, $images, $provider_id = null ) {
-        $attachment_ids = array();
-        foreach ( $images as $image_url ) {
-            if ( empty( $image_url ) ) {
-                continue;
+    private function resolve_unique_sku( $sku, $product_id, $provider_id, $external_id ) {
+        if ( empty( $sku ) ) {
+            return null;
+        }
+
+        $existing_id = wc_get_product_id_by_sku( $sku );
+        if ( $existing_id && (int) $existing_id !== (int) $product_id ) {
+            $existing_provider = get_post_meta( $existing_id, '_external_provider_id', true );
+            $existing_external = get_post_meta( $existing_id, '_external_product_id', true );
+            $matches_external = (string) $existing_provider === (string) $provider_id && (string) $existing_external === (string) $external_id;
+
+            if ( $matches_external ) {
+                return $sku;
             }
 
-            $image_hash = md5( $image_url );
-            $existing = $this->get_attachment_by_hash( $image_hash );
-            if ( ! $existing ) {
-                $existing = $this->get_attachment_by_url( $image_url );
-            }
-            if ( $existing ) {
-                $attachment_ids[] = $existing;
-                $this->logger->info(
-                    'Image processed',
+            if ( $product_id ) {
+                $this->logger->warning(
+                    'SKU conflict detected, keeping existing SKU',
                     $provider_id,
                     array(
                         'product_id' => $product_id,
-                        'attachment_id' => $existing,
-                        'url' => $image_url,
-                        'source' => 'existing',
+                        'sku' => $sku,
+                        'conflict_product_id' => $existing_id,
                     )
                 );
-                continue;
+                return null;
             }
 
-            $attachment_id = $this->sideload_image( $image_url, $product_id, $provider_id );
-            if ( $attachment_id ) {
-                update_post_meta( $attachment_id, '_external_image_hash', $image_hash );
-                $attachment_ids[] = $attachment_id;
-            }
+            $suffix = 0;
+            $candidate = $sku;
+            do {
+                $suffix++;
+                $candidate = sprintf( '%s-%s-%s%s', $sku, $provider_id, $external_id, $suffix > 1 ? '-' . $suffix : '' );
+            } while ( wc_get_product_id_by_sku( $candidate ) );
 
-            $this->logger->info(
-                'Image processed',
+            $this->logger->warning(
+                'SKU conflict detected, using unique fallback',
                 $provider_id,
                 array(
-                    'product_id' => $product_id,
-                    'attachment_id' => $attachment_id ?? null,
-                    'url' => $image_url,
+                    'original_sku' => $sku,
+                    'sku' => $candidate,
+                    'conflict_product_id' => $existing_id,
                 )
             );
+            return $candidate;
         }
 
-        if ( $attachment_ids ) {
-            set_post_thumbnail( $product_id, $attachment_ids[0] );
-            update_post_meta( $product_id, '_product_image_gallery', implode( ',', array_slice( $attachment_ids, 1 ) ) );
-            update_post_meta( $product_id, '_external_image_url', $images[0] );
-        }
-    }
-
-    private function get_attachment_by_url( $url ) {
-        global $wpdb;
-        return $wpdb->get_var( $wpdb->prepare( "SELECT post_id FROM {$wpdb->postmeta} WHERE meta_key = '_wcmas_source_url' AND meta_value = %s LIMIT 1", $url ) );
-    }
-
-    private function get_attachment_by_hash( $image_hash ) {
-        $existing = get_posts(
-            array(
-                'post_type' => 'attachment',
-                'meta_key' => '_external_image_hash',
-                'meta_value' => $image_hash,
-                'numberposts' => 1,
-            )
-        );
-        if ( $existing ) {
-            return $existing[0]->ID;
-        }
-        return null;
-    }
-
-    private function sideload_image( $url, $product_id, $provider_id = null ) {
-        require_once ABSPATH . 'wp-admin/includes/media.php';
-        require_once ABSPATH . 'wp-admin/includes/file.php';
-        require_once ABSPATH . 'wp-admin/includes/image.php';
-
-        $attachment_id = media_sideload_image( $url, $product_id, null, 'id' );
-        if ( is_wp_error( $attachment_id ) ) {
-            $this->logger->error(
-                'Image download failed',
-                $provider_id,
-                array(
-                    'url' => $url,
-                    'error' => $attachment_id->get_error_message(),
-                )
-            );
-            return null;
-        }
-        update_post_meta( $attachment_id, '_wcmas_source_url', esc_url_raw( $url ) );
-        return $attachment_id;
+        return $sku;
     }
 
     private function set_product_attributes( $product_id, $attributes ) {
@@ -292,7 +345,12 @@ class WC_MAS_Woo_Adapter {
                 'is_taxonomy' => 1,
             );
         }
-        update_post_meta( $product_id, '_product_attributes', $product_attributes );
+        $existing_attributes = get_post_meta( $product_id, '_product_attributes', true );
+        if ( $existing_attributes !== $product_attributes ) {
+            update_post_meta( $product_id, '_product_attributes', $product_attributes );
+            return true;
+        }
+        return false;
     }
 
     private function set_variable_product( $product_id, $variations, $attributes, $context = array() ) {

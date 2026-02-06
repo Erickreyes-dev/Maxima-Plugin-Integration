@@ -61,8 +61,51 @@ Ejemplo de mapeo:
 ## Importación manual
 En la tabla de mapeos, haz clic en **Import Now** para ejecutar un job de sincronización.
 
+También puedes forzar una reimportación manual con Action Scheduler:
+```bash
+wp action-scheduler run --hook=wc_mas_sync_provider
+```
+
+## Tabla de index para externos (recomendada)
+Para evitar búsquedas lentas en `post_meta`, el plugin crea la tabla `wp_wcmas_external_map` en la activación. Esta tabla indexa la relación `provider_id + external_id` → `product_id`.
+
+Si la tabla no existe (por ejemplo, si no se ejecutó la activación), el plugin hace fallback a una búsqueda por `meta_query`.
+
+SQL recomendado:
+```sql
+CREATE TABLE IF NOT EXISTS `wp_wcmas_external_map` (
+  `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+  `provider_id` bigint(20) unsigned NOT NULL,
+  `external_id` varchar(191) NOT NULL,
+  `product_id` bigint(20) unsigned DEFAULT NULL,
+  `created_at` datetime DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `provider_external_unique` (`provider_id`,`external_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+```
+
+### Migración opcional (productos existentes)
+Si tenías productos creados con el patrón de SKU `ext-{provider_id}-{external_id}`, puedes poblar la tabla:
+```bash
+wp eval 'require_once WP_PLUGIN_DIR . "/wc-multi-api-sync/admin/migrations.php"; wc_mas_run_external_map_migration();'
+```
+
 ## Logs
 En **Logs** puedes filtrar por proveedor, nivel y fecha.
+
+Ejemplos reales de logs:
+```json
+{"processed":20,"created":3,"updated":12,"skipped":4,"errors":1}
+```
+
+```json
+{"message":"Product updated","product_id":123,"external_id":"A-100","changes":{"regular_price":{"from":"10.00","to":"12.00"}}}
+```
+
+```json
+{"message":"Image sideload failed","product_id":123,"url":"https://cdn.tienda.com/bad.jpg","error":"Invalid URL"}
+```
 
 ## Notificación de ventas
 Cuando un pedido se completa, el plugin enviará un POST al endpoint configurado con el siguiente payload:

@@ -28,10 +28,144 @@ class WC_MAS_Tests extends WP_UnitTestCase {
         if ( ! class_exists( 'WC_Product' ) ) {
             $this->markTestSkipped( 'WooCommerce not available.' );
         }
-        $sync = WC_MAS_Sync::get_instance();
+        $adapter = new WC_MAS_Woo_Adapter();
         $mapped = array( 'title' => 'Test Product', 'sku' => 'SKU-1', 'regular_price' => '12.00' );
-        $sync->create_or_update_product_by_sku( $mapped, array(), 1 );
+        $adapter->create_or_update_product_by_sku( $mapped, array(), 1 );
         $product_id = wc_get_product_id_by_sku( 'SKU-1' );
+        $this->assertNotEmpty( $product_id );
+    }
+
+    public function test_import_without_sku_creates_products_with_external_meta() {
+        if ( ! class_exists( 'WC_Product' ) ) {
+            $this->markTestSkipped( 'WooCommerce not available.' );
+        }
+        $adapter = new WC_MAS_Woo_Adapter();
+        $provider_id = 99;
+        for ( $i = 1; $i <= 3; $i++ ) {
+            $mapped = array(
+                'title' => 'Producto ' . $i,
+                'regular_price' => '10.00',
+            );
+            $payload = array( 'id' => 'ext-' . $i );
+            $adapter->create_or_update_product( $mapped, $payload, $provider_id );
+        }
+        $products = get_posts(
+            array(
+                'post_type' => 'product',
+                'meta_query' => array(
+                    array(
+                        'key' => '_external_provider_id',
+                        'value' => $provider_id,
+                    ),
+                ),
+                'fields' => 'ids',
+            )
+        );
+        $this->assertCount( 3, $products );
+    }
+
+    public function test_reimport_updates_only_price() {
+        if ( ! class_exists( 'WC_Product' ) ) {
+            $this->markTestSkipped( 'WooCommerce not available.' );
+        }
+        $adapter = new WC_MAS_Woo_Adapter();
+        $provider_id = 77;
+        $payload = array( 'id' => 'A-1' );
+        $mapped = array(
+            'title' => 'Producto Precio',
+            'regular_price' => '10.00',
+            'description' => 'Original',
+        );
+        $adapter->create_or_update_product( $mapped, $payload, $provider_id );
+
+        $mapped_updated = array(
+            'title' => 'Producto Precio',
+            'regular_price' => '12.00',
+            'description' => 'Original',
+        );
+        $result = $adapter->create_or_update_product( $mapped_updated, $payload, $provider_id );
+        $product = wc_get_product( $result['product_id'] );
+
+        $this->assertSame( '12', (string) $product->get_regular_price() );
+        $this->assertSame( 'Original', $product->get_description() );
+    }
+
+    public function test_image_dedupe_and_update() {
+        if ( ! class_exists( 'WC_Product' ) ) {
+            $this->markTestSkipped( 'WooCommerce not available.' );
+        }
+
+        add_filter(
+            'wc_mas_media_sideload',
+            function ( $preloaded, $image_url, $product_id ) {
+                $attachment_id = wp_insert_attachment(
+                    array(
+                        'post_title' => 'Test Attachment',
+                        'post_type' => 'attachment',
+                        'post_status' => 'inherit',
+                        'guid' => $image_url,
+                    ),
+                    null,
+                    $product_id
+                );
+                update_post_meta( $attachment_id, '_external_image_url', $image_url );
+                update_post_meta( $attachment_id, '_external_image_hash', md5( $image_url ) );
+                return $attachment_id;
+            },
+            10,
+            3
+        );
+
+        $adapter = new WC_MAS_Woo_Adapter();
+        $provider_id = 55;
+        $payload = array( 'id' => 'IMG-1' );
+        $mapped = array(
+            'title' => 'Producto Imagen',
+            'regular_price' => '8.00',
+            'images' => array( 'https://example.com/image-1.jpg' ),
+        );
+
+        $first = $adapter->create_or_update_product( $mapped, $payload, $provider_id );
+        $first_thumb = get_post_thumbnail_id( $first['product_id'] );
+        $initial_attachments = get_posts( array( 'post_type' => 'attachment', 'fields' => 'ids' ) );
+
+        $second = $adapter->create_or_update_product( $mapped, $payload, $provider_id );
+        $second_thumb = get_post_thumbnail_id( $second['product_id'] );
+        $after_same = get_posts( array( 'post_type' => 'attachment', 'fields' => 'ids' ) );
+
+        $this->assertSame( $first_thumb, $second_thumb );
+        $this->assertCount( count( $initial_attachments ), $after_same );
+
+        $mapped_changed = array(
+            'title' => 'Producto Imagen',
+            'regular_price' => '8.00',
+            'images' => array( 'https://example.com/image-2.jpg' ),
+        );
+        $third = $adapter->create_or_update_product( $mapped_changed, $payload, $provider_id );
+        $third_thumb = get_post_thumbnail_id( $third['product_id'] );
+        $after_changed = get_posts( array( 'post_type' => 'attachment', 'fields' => 'ids' ) );
+
+        $this->assertNotSame( $first_thumb, $third_thumb );
+        $this->assertGreaterThan( count( $after_same ), count( $after_changed ) );
+
+        remove_all_filters( 'wc_mas_media_sideload' );
+    }
+
+    public function test_external_map_race_condition() {
+        $db = WC_MAS_DB::get_instance();
+        if ( ! $db->external_map_table_exists() ) {
+            $this->markTestSkipped( 'External map table not available.' );
+        }
+
+        $provider_id = 11;
+        $external_id = 'race-1';
+        $result_one = $db->upsert_external_map( $provider_id, $external_id, 100 );
+        $result_two = $db->upsert_external_map( $provider_id, $external_id, 101 );
+
+        $this->assertNotEmpty( $result_one['status'] );
+        $this->assertNotEmpty( $result_two['status'] );
+
+        $product_id = $db->get_external_product_id( $provider_id, $external_id );
         $this->assertNotEmpty( $product_id );
     }
 
