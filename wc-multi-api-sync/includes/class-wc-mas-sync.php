@@ -90,14 +90,44 @@ class WC_MAS_Sync {
      * Sync job handler.
      */
     public function handle_sync_job( $provider_id, $mapping_id ) {
+        $this->logger->info(
+            'Sync handler started',
+            $provider_id,
+            array(
+                'mapping_id' => $mapping_id,
+                'via' => ( defined( 'DOING_CRON' ) && DOING_CRON ) ? 'cron' : 'manual',
+            )
+        );
+        do_action( 'wc_api_sync_before_loop' );
+
         $provider = $this->db->get_provider( $provider_id );
         if ( ! $provider || ! $provider['active'] ) {
+            $this->logger->warning(
+                'Sync aborted: provider missing or inactive.',
+                $provider_id,
+                array(
+                    'provider_id' => $provider_id,
+                )
+            );
             return;
         }
 
         $mapping_row = $this->db->get_mapping( $mapping_id );
         if ( ! $mapping_row ) {
-            $this->logger->log( 'error', 'Missing mapping for provider.', $provider_id );
+            $this->logger->error(
+                'Missing mapping for provider.',
+                $provider_id,
+                array(
+                    'mapping_id' => $mapping_id,
+                )
+            );
+            $this->logger->warning(
+                'Sync aborted: mapping missing.',
+                $provider_id,
+                array(
+                    'mapping_id' => $mapping_id,
+                )
+            );
             return;
         }
 
@@ -109,38 +139,149 @@ class WC_MAS_Sync {
         $params = $provider['default_params'] ? json_decode( $provider['default_params'], true ) : array();
         $page = 1;
         $per_page = ! empty( $settings['batch_size'] ) ? (int) $settings['batch_size'] : 50;
-        $total_processed = 0;
+        $totals = array(
+            'processed' => 0,
+            'created' => 0,
+            'updated' => 0,
+            'skipped' => 0,
+            'errors' => 0,
+        );
 
         do {
             $response = $client->paginate( $this->resolve_url( $provider['base_url'], $provider['products_endpoint'] ), $params, $page, $per_page );
 
             if ( is_wp_error( $response ) ) {
-                $this->logger->log( 'error', $response->get_error_message(), $provider_id );
+                $this->logger->error(
+                    $response->get_error_message(),
+                    $provider_id,
+                    array(
+                        'page' => $page,
+                        'endpoint' => $provider['products_endpoint'],
+                    )
+                );
+                $this->logger->warning(
+                    'Sync aborted: provider response error.',
+                    $provider_id,
+                    array(
+                        'page' => $page,
+                    )
+                );
                 return;
             }
 
             $body = $this->resolver->decode_body( wp_remote_retrieve_body( $response ) );
             if ( ! is_array( $body ) ) {
-                $this->logger->log( 'error', 'Invalid JSON response from provider.', $provider_id );
+                $this->logger->error(
+                    'Invalid JSON response from provider.',
+                    $provider_id,
+                    array(
+                        'page' => $page,
+                    )
+                );
+                $this->logger->warning(
+                    'Sync aborted: invalid JSON response.',
+                    $provider_id,
+                    array(
+                        'page' => $page,
+                    )
+                );
                 return;
             }
 
             $products = $this->resolver->extract_products_array( $body );
             if ( ! $products ) {
-                $this->logger->log( 'error', 'No product list found in provider response.', $provider_id );
+                $this->logger->error(
+                    'No product list found in provider response.',
+                    $provider_id,
+                    array(
+                        'page' => $page,
+                    )
+                );
+                $this->logger->warning(
+                    'Sync aborted: no products array found.',
+                    $provider_id,
+                    array(
+                        'page' => $page,
+                    )
+                );
                 return;
             }
-            foreach ( $products as $payload ) {
+            foreach ( $products as $index => $payload ) {
+                $totals['processed']++;
+                $context = array(
+                    'provider_id' => $provider_id,
+                    'mapping_id' => $mapping_id,
+                    'external_index' => $index,
+                    'raw_item_keys' => is_array( $payload ) ? array_keys( $payload ) : array(),
+                );
+                $this->logger->info( 'Processing item', $provider_id, $context );
+
                 $mapped = $mapper->map_product( $payload, $mapping, $provider_id );
-                $this->woo_adapter->create_or_update_product_by_sku( $mapped, $payload, $provider_id );
-                $total_processed++;
+                if ( empty( $mapped ) || ! is_array( $mapped ) ) {
+                    $this->logger->error( 'Mapped data is empty', $provider_id, $context );
+                    $this->logger->warning( 'Skipping product: mapped data empty', $provider_id, $context );
+                    $totals['skipped']++;
+                    continue;
+                }
+                $this->logger->debug( 'Mapped product data', $provider_id, array_merge( $context, array( 'mapped' => $mapped ) ) );
+
+                if ( empty( $mapped['title'] ) ) {
+                    $this->logger->warning( 'Skipping product: title empty', $provider_id, $context );
+                    $totals['skipped']++;
+                    continue;
+                }
+
+                $this->logger->info( 'Before product creation', $provider_id, $context );
+                $result = $this->woo_adapter->create_or_update_product_by_sku( $mapped, $payload, $provider_id );
+                $product_id = $result['product_id'] ?? null;
+                $action = $result['action'] ?? null;
+                $this->logger->info(
+                    'After product creation attempt',
+                    $provider_id,
+                    array_merge(
+                        $context,
+                        array(
+                            'product_id' => $product_id ?? null,
+                            'action' => $action,
+                        )
+                    )
+                );
+
+                if ( empty( $product_id ) ) {
+                    $this->logger->error( 'Product save returned empty ID', $provider_id, $context );
+                    if ( 'skipped' === $action ) {
+                        $totals['skipped']++;
+                    } else {
+                        $totals['errors']++;
+                    }
+                    continue;
+                }
+
+                if ( 'created' === $action ) {
+                    $totals['created']++;
+                } elseif ( 'updated' === $action ) {
+                    $totals['updated']++;
+                } elseif ( 'skipped' === $action ) {
+                    $totals['skipped']++;
+                } else {
+                    $totals['errors']++;
+                }
             }
 
             $total_pages = isset( $body['total'] ) ? ceil( (int) $body['total'] / $per_page ) : $page;
             $page++;
         } while ( $page <= $total_pages );
 
-        $this->logger->log( 'info', 'Sync completed.', $provider_id, array( 'processed' => $total_processed ) );
+        $this->logger->info( 'Sync completed.', $provider_id, $totals );
+        if ( 0 === $totals['created'] ) {
+            $this->logger->warning(
+                'Sync finished but no products were created',
+                $provider_id,
+                array(
+                    'processed' => $totals['processed'],
+                )
+            );
+        }
     }
 
     private function resolve_url( $base_url, $endpoint ) {
