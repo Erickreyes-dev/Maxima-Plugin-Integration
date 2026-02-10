@@ -43,7 +43,7 @@ class WC_MAS_Media {
     }
 
     public function sync_product_images( $product_id, $image_urls, $context = array() ) {
-        $image_urls = array_values( array_filter( array_map( 'esc_url_raw', (array) $image_urls ) ) );
+        $image_urls = $this->normalize_image_urls( $image_urls );
         if ( empty( $image_urls ) ) {
             return array(
                 'updated' => false,
@@ -101,6 +101,62 @@ class WC_MAS_Media {
             'updated' => $updated,
             'attachment_ids' => $attachment_ids,
         );
+    }
+
+    /**
+     * Normaliza una lista de imágenes para soportar strings, arrays de objetos y listas separadas por coma.
+     */
+    private function normalize_image_urls( $image_urls ) {
+        $normalized = array();
+
+        foreach ( (array) $image_urls as $image_item ) {
+            if ( is_string( $image_item ) ) {
+                $parts = preg_split( '/\s*,\s*/', $image_item );
+                foreach ( $parts as $part ) {
+                    $url = esc_url_raw( trim( $part ) );
+                    if ( $url ) {
+                        $normalized[] = $url;
+                    }
+                }
+                continue;
+            }
+
+            if ( is_array( $image_item ) || is_object( $image_item ) ) {
+                $candidate = $this->extract_image_url_from_item( $image_item );
+                if ( $candidate ) {
+                    $normalized[] = $candidate;
+                }
+            }
+        }
+
+        return array_values( array_unique( $normalized ) );
+    }
+
+    /**
+     * Extrae URL de imagen desde estructuras comunes de APIs (url, src, image, href, etc).
+     */
+    private function extract_image_url_from_item( $image_item ) {
+        $keys = array( 'url', 'src', 'image', 'href', 'link', 'secure_url' );
+
+        foreach ( $keys as $key ) {
+            $value = null;
+            if ( is_array( $image_item ) && array_key_exists( $key, $image_item ) ) {
+                $value = $image_item[ $key ];
+            } elseif ( is_object( $image_item ) && isset( $image_item->{$key} ) ) {
+                $value = $image_item->{$key};
+            }
+
+            if ( ! is_string( $value ) ) {
+                continue;
+            }
+
+            $url = esc_url_raw( trim( $value ) );
+            if ( $url ) {
+                return $url;
+            }
+        }
+
+        return null;
     }
 
     private function get_attachment_by_external_url( $image_url ) {
