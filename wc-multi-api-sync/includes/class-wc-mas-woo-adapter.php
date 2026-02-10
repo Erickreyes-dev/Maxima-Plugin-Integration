@@ -132,6 +132,22 @@ class WC_MAS_Woo_Adapter {
         }
 
         $product_id = $product->save();
+        if ( ! $product_id && ! empty( $sku ) ) {
+            $this->logger->warning(
+                'Initial product save failed; retrying without SKU',
+                $provider_id,
+                array_merge(
+                    $context,
+                    array(
+                        'attempted_sku' => $sku,
+                    )
+                )
+            );
+
+            $product->set_sku( '' );
+            $product_id = $product->save();
+        }
+
         if ( ! $product_id ) {
             $this->logger->error(
                 'Product creation failed',
@@ -139,6 +155,7 @@ class WC_MAS_Woo_Adapter {
                 array(
                     'mapped' => $mapped,
                     'external_id' => $external_id,
+                    'sku' => $sku,
                 )
             );
             return array(
