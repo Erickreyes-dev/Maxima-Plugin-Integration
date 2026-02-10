@@ -153,6 +153,25 @@ class WC_MAS_Order_Hooks {
             if ( '' !== $provider_sku ) {
                 return $this->extract_external_id_from_sku( $provider_sku, $provider_id );
             }
+
+            $this->logger->warning(
+                'Notification not enqueued: Action Scheduler unavailable.',
+                $provider_id,
+                array(
+                    'order_id' => $order_id,
+                    'status' => $normalized_order_status,
+                )
+            );
+        }
+    }
+
+    /**
+     * Normalize status values to match WooCommerce internal format.
+     */
+    private function normalize_status( $status ) {
+        $status = wc_clean( (string) $status );
+        if ( 0 === strpos( $status, 'wc-' ) ) {
+            $status = substr( $status, 3 );
         }
 
         return '';
