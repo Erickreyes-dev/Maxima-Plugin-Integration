@@ -29,7 +29,7 @@ class WC_MAS_Woo_Adapter {
         $external_id = $payload['id'] ?? ( $mapped['external_id'] ?? null );
         $sku = $mapped['sku'] ?? null;
         if ( empty( $sku ) && ! empty( $external_id ) ) {
-            $sku = 'ext-' . $provider_id . '-' . $external_id;
+           $sku = $provider_id . '-' . $external_id;
             $this->logger->info(
                 'Generated SKU from external_id',
                 $provider_id,
@@ -86,6 +86,7 @@ class WC_MAS_Woo_Adapter {
         }
 
         if ( ! empty( $sku ) ) {
+            $sku = $this->prefix_provider_sku( $sku, $provider_id );
             $sku = $this->resolve_unique_sku( $sku, $product_id, $provider_id, $external_id );
             if ( $sku && $sku !== $product->get_sku() ) {
                 $changes['sku'] = array( 'from' => $product->get_sku(), 'to' => $sku );
@@ -308,6 +309,16 @@ class WC_MAS_Woo_Adapter {
         return $sku;
     }
 
+        private function prefix_provider_sku( $sku, $provider_id ) {
+        $prefix = $provider_id . '-';
+        if ( str_starts_with( $sku, $prefix ) ) {
+            return $sku;
+        }
+
+        return $prefix . $sku;
+    }
+
+    
     private function set_product_attributes( $product_id, $attributes ) {
         $product_attributes = array();
         foreach ( $attributes as $name => $options ) {
