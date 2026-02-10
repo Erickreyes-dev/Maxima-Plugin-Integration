@@ -96,6 +96,13 @@ class WC_MAS_Admin {
         }
 
         $this->handle_provider_form();
+        $editing_provider_id = isset( $_GET['edit_provider_id'] ) ? (int) $_GET['edit_provider_id'] : 0;
+        $editing_provider = $editing_provider_id ? $this->db->get_provider( $editing_provider_id ) : null;
+        if ( $editing_provider ) {
+            $editing_provider['auth_config'] = ! empty( $editing_provider['auth_config'] ) ? json_decode( $editing_provider['auth_config'], true ) : array();
+            $editing_provider['headers_text'] = $this->stringify_kv_pairs( ! empty( $editing_provider['headers'] ) ? json_decode( $editing_provider['headers'], true ) : array() );
+            $editing_provider['default_params_text'] = $this->stringify_kv_pairs( ! empty( $editing_provider['default_params'] ) ? json_decode( $editing_provider['default_params'], true ) : array() );
+        }
         $providers = $this->db->get_providers();
         include WC_MAS_PLUGIN_DIR . 'templates/providers-page.php';
     }
@@ -107,8 +114,19 @@ class WC_MAS_Admin {
 
         $this->handle_mapping_form();
         $provider_id = isset( $_GET['provider_id'] ) ? (int) $_GET['provider_id'] : 0;
+        $edit_mapping_id = isset( $_GET['edit_mapping_id'] ) ? (int) $_GET['edit_mapping_id'] : 0;
         $providers = $this->db->get_providers();
         $mappings = $provider_id ? $this->mapping_storage->get_mappings( $provider_id ) : array();
+        $editing_mapping = null;
+        if ( $provider_id && $edit_mapping_id ) {
+            $editing_mapping = $this->mapping_storage->get_mapping( $edit_mapping_id );
+            if ( $editing_mapping && (int) $editing_mapping['provider_id'] !== $provider_id ) {
+                $editing_mapping = null;
+            }
+            if ( $editing_mapping ) {
+                $editing_mapping['mapping'] = json_decode( $editing_mapping['mapping_json'], true );
+            }
+        }
         include WC_MAS_PLUGIN_DIR . 'templates/mappings-page.php';
     }
 
@@ -153,6 +171,9 @@ class WC_MAS_Admin {
             return;
         }
 
+        $provider_id = isset( $_POST['provider_id'] ) ? (int) $_POST['provider_id'] : null;
+        $existing_provider = $provider_id ? $this->db->get_provider( $provider_id ) : null;
+
         $auth_config = array(
             'api_key' => sanitize_text_field( wp_unslash( $_POST['api_key'] ?? '' ) ),
             'header_name' => sanitize_text_field( wp_unslash( $_POST['header_name'] ?? '' ) ),
@@ -160,10 +181,16 @@ class WC_MAS_Admin {
             'password' => sanitize_text_field( wp_unslash( $_POST['password'] ?? '' ) ),
         );
 
+        $existing_auth = array();
+        if ( $existing_provider && ! empty( $existing_provider['auth_config'] ) ) {
+            $decoded_auth = json_decode( $existing_provider['auth_config'], true );
+            if ( is_array( $decoded_auth ) ) {
+                $existing_auth = $decoded_auth;
+            }
+        }
+
         $headers = $this->parse_kv_pairs( wp_unslash( $_POST['headers'] ?? '' ) );
         $params = $this->parse_kv_pairs( wp_unslash( $_POST['default_params'] ?? '' ) );
-
-        $provider_id = isset( $_POST['provider_id'] ) ? (int) $_POST['provider_id'] : null;
 
         $data = array(
             'name' => sanitize_text_field( wp_unslash( $_POST['name'] ?? '' ) ),
@@ -171,7 +198,7 @@ class WC_MAS_Admin {
             'products_endpoint' => sanitize_text_field( wp_unslash( $_POST['products_endpoint'] ?? '' ) ),
             'notify_endpoint' => esc_url_raw( wp_unslash( $_POST['notify_endpoint'] ?? '' ) ),
             'auth_type' => sanitize_text_field( wp_unslash( $_POST['auth_type'] ?? 'none' ) ),
-            'auth_config' => wp_json_encode( $this->maybe_encrypt_auth( $auth_config ) ),
+            'auth_config' => wp_json_encode( $this->maybe_encrypt_auth( $auth_config, $existing_auth ) ),
             'headers' => wp_json_encode( $headers ),
             'default_params' => wp_json_encode( $params ),
             'sync_frequency' => sanitize_text_field( wp_unslash( $_POST['sync_frequency'] ?? 'hourly' ) ),
@@ -190,7 +217,7 @@ class WC_MAS_Admin {
             if ( ! is_array( $mapping ) ) {
                 $mapping = array();
             }
-            $mapping_name = sanitize_text_field( wp_unslash( $_POST['mapping_name'] ) );
+            $mapping_name = sanitize_text_field( wp_unslash( $_POST['mapping_name'] ?? '' ) );
             $validated_mapping = $this->validate_mapping( $provider_id, $mapping );
             if ( ! $mapping_name || ! $validated_mapping ) {
                 $this->logger->log( 'error', 'Mapping validation failed.', $provider_id );
@@ -309,12 +336,30 @@ class WC_MAS_Admin {
         return $pairs;
     }
 
-    private function maybe_encrypt_auth( $auth_config ) {
+    private function stringify_kv_pairs( $pairs ) {
+        if ( empty( $pairs ) || ! is_array( $pairs ) ) {
+            return '';
+        }
+
+        $lines = array();
+        foreach ( $pairs as $key => $value ) {
+            $lines[] = $key . ':' . $value;
+        }
+
+        return implode( "\n", $lines );
+    }
+
+    private function maybe_encrypt_auth( $auth_config, $existing_auth = array() ) {
         $encrypted = $auth_config;
         $db = WC_MAS_DB::get_instance();
         foreach ( array( 'api_key', 'password' ) as $field ) {
             if ( ! empty( $encrypted[ $field ] ) ) {
                 $encrypted[ $field ] = $db->encrypt_secret( $encrypted[ $field ] );
+                continue;
+            }
+
+            if ( ! empty( $existing_auth[ $field ] ) ) {
+                $encrypted[ $field ] = $existing_auth[ $field ];
             }
         }
         return $encrypted;
