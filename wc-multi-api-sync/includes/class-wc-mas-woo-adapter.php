@@ -72,9 +72,12 @@ class WC_MAS_Woo_Adapter {
 
         $changes = array();
 
-        if ( isset( $mapped['title'] ) && $mapped['title'] !== $product->get_name() ) {
-            $changes['title'] = array( 'from' => $product->get_name(), 'to' => $mapped['title'] );
-            $product->set_name( $mapped['title'] );
+        if ( isset( $mapped['title'] ) ) {
+            $prefixed_title = $this->prefix_provider_title( $mapped['title'], $provider_id );
+            if ( $prefixed_title !== $product->get_name() ) {
+                $changes['title'] = array( 'from' => $product->get_name(), 'to' => $prefixed_title );
+                $product->set_name( $prefixed_title );
+            }
         }
         if ( isset( $mapped['short_description'] ) && $mapped['short_description'] !== $product->get_short_description() ) {
             $changes['short_description'] = array( 'from' => $product->get_short_description(), 'to' => $mapped['short_description'] );
@@ -309,13 +312,22 @@ class WC_MAS_Woo_Adapter {
         return $sku;
     }
 
-        private function prefix_provider_sku( $sku, $provider_id ) {
+    private function prefix_provider_sku( $sku, $provider_id ) {
         $prefix = $provider_id . '-';
         if ( str_starts_with( $sku, $prefix ) ) {
             return $sku;
         }
 
         return $prefix . $sku;
+    }
+
+    private function prefix_provider_title( $title, $provider_id ) {
+        $prefix = $provider_id . '-';
+        if ( str_starts_with( $title, $prefix ) ) {
+            return $title;
+        }
+
+        return $prefix . $title;
     }
 
     
