@@ -50,6 +50,8 @@ class WC_MAS_Order_Hooks {
             return;
         }
 
+        $normalized_order_status = $this->normalize_status( $order_status );
+
         $grouped = array();
 
         foreach ( $order->get_items() as $item ) {
@@ -65,8 +67,8 @@ class WC_MAS_Order_Hooks {
                 continue;
             }
 
-            $notify_status = isset( $provider['notify_status'] ) ? $provider['notify_status'] : 'completed';
-            if ( $notify_status !== $order_status ) {
+            $notify_status = isset( $provider['notify_status'] ) ? $this->normalize_status( $provider['notify_status'] ) : 'completed';
+            if ( $notify_status !== $normalized_order_status ) {
                 continue;
             }
 
@@ -100,7 +102,7 @@ class WC_MAS_Order_Hooks {
                 'order_id' => $order_id,
                 'order_key' => $order->get_order_key(),
                 'currency' => $order->get_currency(),
-                'status' => $order_status,
+                'status' => $normalized_order_status,
                 'customer' => array(
                     'name' => $order->get_formatted_billing_full_name(),
                     'email' => $order->get_billing_email(),
@@ -109,9 +111,31 @@ class WC_MAS_Order_Hooks {
                 'timestamp' => gmdate( 'c' ),
             );
 
-            if ( class_exists( 'ActionScheduler' ) ) {
+            if ( function_exists( 'as_enqueue_async_action' ) ) {
                 as_enqueue_async_action( WC_MAS_Sync::ACTION_NOTIFY, array( $provider_id, $payload, 1 ), 'wc-mas' );
+                continue;
             }
+
+            $this->logger->warning(
+                'Notification not enqueued: Action Scheduler unavailable.',
+                $provider_id,
+                array(
+                    'order_id' => $order_id,
+                    'status' => $normalized_order_status,
+                )
+            );
         }
+    }
+
+    /**
+     * Normalize status values to match WooCommerce internal format.
+     */
+    private function normalize_status( $status ) {
+        $status = wc_clean( (string) $status );
+        if ( 0 === strpos( $status, 'wc-' ) ) {
+            $status = substr( $status, 3 );
+        }
+
+        return $status;
     }
 }

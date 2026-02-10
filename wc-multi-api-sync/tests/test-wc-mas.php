@@ -206,6 +206,43 @@ class WC_MAS_Tests extends WP_UnitTestCase {
         $this->assertTrue( as_has_scheduled_action( WC_MAS_Sync::ACTION_NOTIFY ) );
     }
 
+    public function test_enqueue_notification_on_processing_with_wc_status_prefix() {
+        if ( ! function_exists( 'as_has_scheduled_action' ) || ! class_exists( 'WC_Product' ) ) {
+            $this->markTestSkipped( 'Action Scheduler or WooCommerce not available.' );
+        }
+
+        $provider_id = WC_MAS_DB::get_instance()->upsert_provider(
+            array(
+                'name' => 'Provider Processing Notify',
+                'base_url' => 'https://example.com',
+                'products_endpoint' => '/products',
+                'notify_endpoint' => 'https://example.com/notify',
+                'notify_status' => 'wc-processing',
+                'auth_type' => 'none',
+                'auth_config' => wp_json_encode( array() ),
+                'headers' => wp_json_encode( array() ),
+                'default_params' => wp_json_encode( array() ),
+                'sync_frequency' => 'hourly',
+                'active' => 1,
+            )
+        );
+
+        $product = new WC_Product();
+        $product->set_name( 'Notify Processing Product' );
+        $product->set_sku( 'SKU-3' );
+        $product_id = $product->save();
+        update_post_meta( $product_id, '_external_provider_id', $provider_id );
+        update_post_meta( $product_id, '_external_product_id', 'ext-2' );
+
+        $order = wc_create_order();
+        $order->add_product( wc_get_product( $product_id ), 1 );
+        $order->calculate_totals();
+        $order->save();
+
+        WC_MAS_Order_Hooks::get_instance()->handle_order_processing( $order->get_id() );
+        $this->assertTrue( as_has_scheduled_action( WC_MAS_Sync::ACTION_NOTIFY ) );
+    }
+
     public function test_retry_logic_for_failed_notify() {
         if ( ! class_exists( 'ActionScheduler' ) ) {
             $this->markTestSkipped( 'Action Scheduler not available.' );
