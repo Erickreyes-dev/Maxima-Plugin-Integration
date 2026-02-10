@@ -26,24 +26,12 @@ class WC_MAS_Woo_Adapter {
     }
 
     public function create_or_update_product( $mapped, $payload, $provider_id, $product_id = null ) {
-        $external_id = $payload['id'] ?? ( $mapped['external_id'] ?? null );
-        $sku = $mapped['sku'] ?? null;
-        if ( empty( $sku ) && ! empty( $external_id ) ) {
-           $sku = $provider_id . '-' . $external_id;
-            $this->logger->info(
-                'Generated SKU from external_id',
-                $provider_id,
-                array(
-                    'sku' => $sku,
-                    'external_id' => $external_id,
-                )
-            );
-        }
+        $sku = isset( $mapped['sku'] ) ? sanitize_text_field( (string) $mapped['sku'] ) : '';
+        $sku = $this->prefix_provider_sku( $sku, $provider_id );
 
         $context = array(
             'provider_id' => $provider_id,
             'sku' => $sku,
-            'external_id' => $external_id,
         );
 
         if ( empty( $mapped['title'] ) ) {
@@ -89,8 +77,7 @@ class WC_MAS_Woo_Adapter {
         }
 
         if ( ! empty( $sku ) ) {
-            $sku = $this->prefix_provider_sku( $sku, $provider_id );
-            $sku = $this->resolve_unique_sku( $sku, $product_id, $provider_id, $external_id );
+            $sku = $this->resolve_unique_sku( $sku, $product_id, $provider_id );
             if ( $sku && $sku !== $product->get_sku() ) {
                 $changes['sku'] = array( 'from' => $product->get_sku(), 'to' => $sku );
                 $product->set_sku( $sku );
@@ -132,13 +119,29 @@ class WC_MAS_Woo_Adapter {
         }
 
         $product_id = $product->save();
+        if ( ! $product_id && ! empty( $sku ) ) {
+            $this->logger->warning(
+                'Initial product save failed; retrying without SKU',
+                $provider_id,
+                array_merge(
+                    $context,
+                    array(
+                        'attempted_sku' => $sku,
+                    )
+                )
+            );
+
+            $product->set_sku( '' );
+            $product_id = $product->save();
+        }
+
         if ( ! $product_id ) {
             $this->logger->error(
                 'Product creation failed',
                 $provider_id,
                 array(
                     'mapped' => $mapped,
-                    'external_id' => $external_id,
+                    'sku' => $sku,
                 )
             );
             return array(
@@ -167,42 +170,7 @@ class WC_MAS_Woo_Adapter {
         }
 
         update_post_meta( $product_id, '_external_provider_id', $provider_id );
-        update_post_meta( $product_id, '_external_product_id', (string) $external_id );
-
-        if ( ! empty( $external_id ) ) {
-            $map_result = $this->db->upsert_external_map( $provider_id, $external_id, $product_id );
-            if ( 'race' === $map_result['status'] ) {
-                $this->logger->warning(
-                    'External map insert race handled',
-                    $provider_id,
-                    array_merge(
-                        $context,
-                        array(
-                            'product_id' => $product_id,
-                            'existing_id' => $map_result['existing_id'] ?? null,
-                        )
-                    )
-                );
-            } elseif ( 'error' === $map_result['status'] ) {
-                $this->logger->error(
-                    'External map update failed',
-                    $provider_id,
-                    array_merge(
-                        $context,
-                        array(
-                            'product_id' => $product_id,
-                            'error' => $map_result['error'] ?? null,
-                        )
-                    )
-                );
-            }
-        } else {
-            $this->logger->warning(
-                'External ID missing; external map update skipped',
-                $provider_id,
-                array_merge( $context, array( 'product_id' => $product_id ) )
-            );
-        }
+        update_post_meta( $product_id, '_external_provider_sku', (string) $sku );
 
         if ( ! empty( $mapped['images'] ) && is_array( $mapped['images'] ) ) {
             $image_result = $this->media->sync_product_images( $product_id, $mapped['images'], $context );
@@ -215,12 +183,15 @@ class WC_MAS_Woo_Adapter {
 
         if ( ! empty( $mapped['categories'] ) && is_array( $mapped['categories'] ) ) {
             $existing_terms = wp_get_object_terms( $product_id, 'product_cat', array( 'fields' => 'names' ) );
-            $mapped_categories = array_values( array_unique( $mapped['categories'] ) );
+            $mapped_categories = $this->normalize_categories( $mapped['categories'] );
             sort( $existing_terms );
             sort( $mapped_categories );
             if ( $existing_terms !== $mapped_categories ) {
-                wp_set_object_terms( $product_id, $mapped['categories'], 'product_cat', false );
-                $changes['categories'] = array( 'from' => $existing_terms, 'to' => $mapped_categories );
+                $category_ids = $this->ensure_product_categories( $mapped_categories );
+                if ( ! empty( $category_ids ) ) {
+                    wp_set_object_terms( $product_id, $category_ids, 'product_cat', false );
+                    $changes['categories'] = array( 'from' => $existing_terms, 'to' => $mapped_categories );
+                }
             }
         }
 
@@ -250,7 +221,7 @@ class WC_MAS_Woo_Adapter {
             $provider_id,
             array(
                 'product_id' => $product_id,
-                'external_id' => $external_id,
+                'sku' => $sku,
                 'changes' => $changes,
             )
         );
@@ -262,21 +233,13 @@ class WC_MAS_Woo_Adapter {
         );
     }
 
-    private function resolve_unique_sku( $sku, $product_id, $provider_id, $external_id ) {
+    private function resolve_unique_sku( $sku, $product_id, $provider_id ) {
         if ( empty( $sku ) ) {
             return null;
         }
 
         $existing_id = wc_get_product_id_by_sku( $sku );
         if ( $existing_id && (int) $existing_id !== (int) $product_id ) {
-            $existing_provider = get_post_meta( $existing_id, '_external_provider_id', true );
-            $existing_external = get_post_meta( $existing_id, '_external_product_id', true );
-            $matches_external = (string) $existing_provider === (string) $provider_id && (string) $existing_external === (string) $external_id;
-
-            if ( $matches_external ) {
-                return $sku;
-            }
-
             if ( $product_id ) {
                 $this->logger->warning(
                     'SKU conflict detected, keeping existing SKU',
@@ -294,7 +257,7 @@ class WC_MAS_Woo_Adapter {
             $candidate = $sku;
             do {
                 $suffix++;
-                $candidate = sprintf( '%s-%s-%s%s', $sku, $provider_id, $external_id, $suffix > 1 ? '-' . $suffix : '' );
+                $candidate = sprintf( '%s-%s%s', $sku, $provider_id, $suffix > 1 ? '-' . $suffix : '' );
             } while ( wc_get_product_id_by_sku( $candidate ) );
 
             $this->logger->warning(
@@ -330,7 +293,51 @@ class WC_MAS_Woo_Adapter {
         return $prefix . $title;
     }
 
-    
+
+    private function normalize_categories( $categories ) {
+        $normalized = array();
+        foreach ( $categories as $category ) {
+            if ( is_array( $category ) ) {
+                $category = $category['name'] ?? '';
+            }
+            $category = sanitize_text_field( (string) $category );
+            if ( '' === $category ) {
+                continue;
+            }
+            $normalized[] = $category;
+        }
+
+        return array_values( array_unique( $normalized ) );
+    }
+
+    private function ensure_product_categories( $categories ) {
+        $term_ids = array();
+
+        foreach ( $categories as $category_name ) {
+            $term = get_term_by( 'name', $category_name, 'product_cat' );
+            if ( ! $term ) {
+                $inserted = wp_insert_term( $category_name, 'product_cat' );
+                if ( is_wp_error( $inserted ) ) {
+                    $this->logger->warning(
+                        'Category creation failed',
+                        null,
+                        array(
+                            'category' => $category_name,
+                            'error' => $inserted->get_error_message(),
+                        )
+                    );
+                    continue;
+                }
+                $term_ids[] = (int) $inserted['term_id'];
+                continue;
+            }
+
+            $term_ids[] = (int) $term->term_id;
+        }
+
+        return array_values( array_unique( $term_ids ) );
+    }
+
     private function set_product_attributes( $product_id, $attributes ) {
         $product_attributes = array();
         foreach ( $attributes as $name => $options ) {

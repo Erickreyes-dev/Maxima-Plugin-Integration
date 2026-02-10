@@ -231,53 +231,15 @@ class WC_MAS_Sync {
                     continue;
                 }
 
-                $external_id = $payload['id'] ?? ( $mapped['external_id'] ?? null );
+                $lookup_sku = isset( $mapped['sku'] ) ? sanitize_text_field( (string) $mapped['sku'] ) : '';
                 $this->logger->info(
-                    'Resolved external_id',
+                    'Resolved product identifier (SKU)',
                     $provider_id,
-                    array_merge( $context, array( 'external_id' => $external_id ) )
-                );
-
-                $product_id = null;
-                if ( ! empty( $external_id ) ) {
-                    $product_id = $this->db->get_external_product_id( $provider_id, $external_id );
-                }
-
-                if ( ! $product_id && ! empty( $external_id ) ) {
-                    $existing = get_posts(
-                        array(
-                            'post_type' => 'product',
-                            'meta_query' => array(
-                                array(
-                                    'key' => '_external_provider_id',
-                                    'value' => $provider_id,
-                                ),
-                                array(
-                                    'key' => '_external_product_id',
-                                    'value' => (string) $external_id,
-                                ),
-                            ),
-                            'posts_per_page' => 1,
-                            'fields' => 'ids',
-                        )
-                    );
-                    $product_id = $existing ? $existing[0] : null;
-                }
-
-                $this->logger->info(
-                    'Lookup result',
-                    $provider_id,
-                    array_merge(
-                        $context,
-                        array(
-                            'product_id' => $product_id,
-                            'external_id' => $external_id,
-                        )
-                    )
+                    array_merge( $context, array( 'sku' => $lookup_sku ) )
                 );
 
                 $this->logger->info( 'Before product creation', $provider_id, $context );
-                $result = $this->woo_adapter->create_or_update_product( $mapped, $payload, $provider_id, $product_id );
+                $result = $this->woo_adapter->create_or_update_product( $mapped, $payload, $provider_id, null );
                 $product_id = $result['product_id'] ?? null;
                 $action = $result['action'] ?? null;
                 $this->logger->info(
