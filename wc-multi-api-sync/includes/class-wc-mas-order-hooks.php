@@ -77,7 +77,7 @@ class WC_MAS_Order_Hooks {
                 continue;
             }
 
-            $external_product_id = get_post_meta( $product_id, '_external_product_id', true );
+            $external_product_id = $this->resolve_external_product_id( $item, $provider_id );
             if ( empty( $external_product_id ) ) {
                 $this->logger->warning(
                     'Order item missing external product id',
@@ -125,6 +125,73 @@ class WC_MAS_Order_Hooks {
                 )
             );
         }
+    }
+
+
+    /**
+     * Resolve external product id from the order item product metadata.
+     */
+    private function resolve_external_product_id( $item, $provider_id ) {
+        $product_ids = array_filter(
+            array(
+                (int) $item->get_variation_id(),
+                (int) $item->get_product_id(),
+            )
+        );
+
+        foreach ( $product_ids as $product_id ) {
+            $external_product_id = get_post_meta( $product_id, '_external_product_id', true );
+            if ( '' !== (string) $external_product_id ) {
+                return $external_product_id;
+            }
+
+            $provider_sku = (string) get_post_meta( $product_id, '_external_provider_sku', true );
+            if ( '' === $provider_sku ) {
+                $provider_sku = (string) get_post_meta( $product_id, '_sku', true );
+            }
+
+            if ( '' !== $provider_sku ) {
+                return $this->extract_external_id_from_sku( $provider_sku, $provider_id );
+            }
+
+            $this->logger->warning(
+                'Notification not enqueued: Action Scheduler unavailable.',
+                $provider_id,
+                array(
+                    'order_id' => $order_id,
+                    'status' => $normalized_order_status,
+                )
+            );
+        }
+    }
+
+    /**
+     * Normalize status values to match WooCommerce internal format.
+     */
+    private function normalize_status( $status ) {
+        $status = wc_clean( (string) $status );
+        if ( 0 === strpos( $status, 'wc-' ) ) {
+            $status = substr( $status, 3 );
+        }
+
+        return '';
+    }
+
+    /**
+     * Extract external id from provider-prefixed sku values.
+     */
+    private function extract_external_id_from_sku( $sku, $provider_id ) {
+        $sku = wc_clean( (string) $sku );
+        if ( '' === $sku ) {
+            return '';
+        }
+
+        $provider_prefix = (string) $provider_id . '-';
+        if ( str_starts_with( $sku, $provider_prefix ) ) {
+            return substr( $sku, strlen( $provider_prefix ) );
+        }
+
+        return $sku;
     }
 
     /**
