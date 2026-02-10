@@ -39,7 +39,8 @@ require_once WC_MAS_PLUGIN_DIR . 'admin/migrations.php';
 function wc_mas_init_plugin() {
     load_plugin_textdomain( 'wc-multi-api-sync', false, dirname( plugin_basename( __FILE__ ) ) . '/languages' );
 
-    WC_MAS_DB::get_instance();
+    $db = WC_MAS_DB::get_instance();
+    $db->ensure_schema_updates();
     WC_MAS_Logger::get_instance();
     WC_MAS_Sync::get_instance();
     WC_MAS_Order_Hooks::get_instance();

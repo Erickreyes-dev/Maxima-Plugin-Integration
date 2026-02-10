@@ -173,11 +173,29 @@ class WC_MAS_Tests extends WP_UnitTestCase {
         if ( ! class_exists( 'ActionScheduler' ) || ! class_exists( 'WC_Product' ) ) {
             $this->markTestSkipped( 'Action Scheduler or WooCommerce not available.' );
         }
+
+        $provider_id = WC_MAS_DB::get_instance()->upsert_provider(
+            array(
+                'name' => 'Provider Notify',
+                'base_url' => 'https://example.com',
+                'products_endpoint' => '/products',
+                'notify_endpoint' => 'https://example.com/notify',
+                'notify_status' => 'completed',
+                'auth_type' => 'none',
+                'auth_config' => wp_json_encode( array() ),
+                'headers' => wp_json_encode( array() ),
+                'default_params' => wp_json_encode( array() ),
+                'sync_frequency' => 'hourly',
+                'active' => 1,
+            )
+        );
+
         $product = new WC_Product();
         $product->set_name( 'Notify Product' );
         $product->set_sku( 'SKU-2' );
         $product_id = $product->save();
-        update_post_meta( $product_id, '_wcmas_provider_id', 1 );
+        update_post_meta( $product_id, '_external_provider_id', $provider_id );
+        update_post_meta( $product_id, '_external_product_id', 'ext-1' );
 
         $order = wc_create_order();
         $order->add_product( wc_get_product( $product_id ), 1 );

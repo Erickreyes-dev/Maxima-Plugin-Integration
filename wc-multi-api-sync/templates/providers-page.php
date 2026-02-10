@@ -31,6 +31,15 @@ $provider_auth = $editing_provider['auth_config'] ?? array();
                 <td><input name="notify_endpoint" id="notify_endpoint" type="url" class="regular-text" value="<?php echo esc_attr( $editing_provider['notify_endpoint'] ?? '' ); ?>" required></td>
             </tr>
             <tr>
+                <th><label for="notify_status"><?php esc_html_e( 'Notify on Order Status', 'wc-multi-api-sync' ); ?></label></th>
+                <td>
+                    <select name="notify_status" id="notify_status">
+                        <option value="completed" <?php selected( $editing_provider['notify_status'] ?? 'completed', 'completed' ); ?>><?php esc_html_e( 'Completed', 'wc-multi-api-sync' ); ?></option>
+                        <option value="processing" <?php selected( $editing_provider['notify_status'] ?? 'completed', 'processing' ); ?>><?php esc_html_e( 'Processing', 'wc-multi-api-sync' ); ?></option>
+                    </select>
+                </td>
+            </tr>
+            <tr>
                 <th><label for="auth_type"><?php esc_html_e( 'Auth Type', 'wc-multi-api-sync' ); ?></label></th>
                 <td>
                     <select name="auth_type" id="auth_type">

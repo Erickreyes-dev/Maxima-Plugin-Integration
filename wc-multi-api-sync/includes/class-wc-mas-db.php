@@ -41,6 +41,7 @@ class WC_MAS_DB {
             base_url TEXT NOT NULL,
             products_endpoint TEXT NOT NULL,
             notify_endpoint TEXT NOT NULL,
+            notify_status VARCHAR(50) NOT NULL DEFAULT 'completed',
             auth_type VARCHAR(50) NOT NULL DEFAULT 'none',
             auth_config LONGTEXT NULL,
             headers LONGTEXT NULL,
@@ -86,6 +87,24 @@ class WC_MAS_DB {
         ) {$charset_collate};";
 
         dbDelta( $sql );
+        $this->ensure_schema_updates();
+    }
+
+    /**
+     * Keep schema compatible for existing installs.
+     */
+    public function ensure_schema_updates() {
+        $providers_table = $this->wpdb->prefix . 'wcmas_providers';
+        $table_exists = $this->wpdb->get_var( $this->wpdb->prepare( 'SHOW TABLES LIKE %s', $providers_table ) );
+        if ( $providers_table !== $table_exists ) {
+            return;
+        }
+
+        $column = $this->wpdb->get_var( $this->wpdb->prepare( "SHOW COLUMNS FROM {$providers_table} LIKE %s", 'notify_status' ) );
+
+        if ( ! $column ) {
+            $this->wpdb->query( "ALTER TABLE {$providers_table} ADD COLUMN notify_status VARCHAR(50) NOT NULL DEFAULT 'completed' AFTER notify_endpoint" );
+        }
     }
 
     public function external_map_table_exists() {

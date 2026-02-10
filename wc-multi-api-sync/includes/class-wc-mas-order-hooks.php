@@ -10,6 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 class WC_MAS_Order_Hooks {
     private static $instance;
     private $logger;
+    private $db;
 
     public static function get_instance() {
         if ( null === self::$instance ) {
@@ -20,15 +21,30 @@ class WC_MAS_Order_Hooks {
 
     private function __construct() {
         $this->logger = WC_MAS_Logger::get_instance();
+        $this->db = WC_MAS_DB::get_instance();
 
-        // Hook al pago completado (automático) en lugar de completed manual
-        add_action( 'woocommerce_payment_complete', array( $this, 'handle_order_payment_complete' ), 10, 1 );
+        add_action( 'woocommerce_order_status_processing', array( $this, 'handle_order_processing' ), 10, 1 );
+        add_action( 'woocommerce_order_status_completed', array( $this, 'handle_order_completed' ), 10, 1 );
     }
 
     /**
-     * Maneja el pago completado y notifica a los proveedores
+     * Notify providers configured to run on processing status.
      */
-    public function handle_order_payment_complete( $order_id ) {
+    public function handle_order_processing( $order_id ) {
+        $this->handle_order_by_status( $order_id, 'processing' );
+    }
+
+    /**
+     * Notify providers configured to run on completed status.
+     */
+    public function handle_order_completed( $order_id ) {
+        $this->handle_order_by_status( $order_id, 'completed' );
+    }
+
+    /**
+     * Build provider payloads and enqueue notifications based on provider config.
+     */
+    private function handle_order_by_status( $order_id, $order_status ) {
         $order = wc_get_order( $order_id );
         if ( ! $order ) {
             return;
@@ -44,12 +60,21 @@ class WC_MAS_Order_Hooks {
                 continue;
             }
 
+            $provider = $this->db->get_provider( $provider_id );
+            if ( ! $provider || ! (int) $provider['active'] ) {
+                continue;
+            }
+
+            $notify_status = isset( $provider['notify_status'] ) ? $provider['notify_status'] : 'completed';
+            if ( $notify_status !== $order_status ) {
+                continue;
+            }
+
             $product = $item->get_product();
             if ( ! $product ) {
                 continue;
             }
 
-            // SKU original que entiende la API del proveedor
             $external_product_id = get_post_meta( $product_id, '_external_product_id', true );
             if ( empty( $external_product_id ) ) {
                 $this->logger->warning(
@@ -63,26 +88,25 @@ class WC_MAS_Order_Hooks {
                 continue;
             }
 
-            // Agrupar por proveedor
             $grouped[ $provider_id ][] = array(
                 'product_id' => $external_product_id,
-                'qty'        => $item->get_quantity(),
-                'price'      => $item->get_total(),
+                'qty' => $item->get_quantity(),
+                'price' => $item->get_total(),
             );
         }
 
-        // Enviar payload a cada proveedor
         foreach ( $grouped as $provider_id => $items ) {
             $payload = array(
-                'order_id'   => $order_id,
-                'order_key'  => $order->get_order_key(),
-                'currency'   => $order->get_currency(),
-                'customer'   => array(
-                    'name'  => $order->get_formatted_billing_full_name(),
+                'order_id' => $order_id,
+                'order_key' => $order->get_order_key(),
+                'currency' => $order->get_currency(),
+                'status' => $order_status,
+                'customer' => array(
+                    'name' => $order->get_formatted_billing_full_name(),
                     'email' => $order->get_billing_email(),
                 ),
-                'items'      => $items,
-                'timestamp'  => gmdate( 'c' ),
+                'items' => $items,
+                'timestamp' => gmdate( 'c' ),
             );
 
             if ( class_exists( 'ActionScheduler' ) ) {
