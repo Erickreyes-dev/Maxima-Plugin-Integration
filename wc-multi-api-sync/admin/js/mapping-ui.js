@@ -37,6 +37,33 @@ jQuery(function ($) {
     $('#wc-mas-mapping-table tbody').append(row);
   }
 
+
+  function initializeEditingMapping() {
+    var form = $('#wc-mas-mapping-form');
+    if (!form.length) {
+      return;
+    }
+
+    var editingRaw = form.attr('data-editing-mapping') || '{}';
+    var editing = {};
+    try {
+      editing = JSON.parse(editingRaw);
+    } catch (error) {
+      editing = {};
+    }
+
+    if (editing && Object.keys(editing).length) {
+      Object.keys(editing).forEach(function (wooField) {
+        addMappingRow(wooField, editing[wooField]);
+      });
+      return;
+    }
+
+    if ($('#wc-mas-mapping-table tbody tr').length === 0) {
+      addMappingRow('', '');
+    }
+  }
+
   function buildMappingJson() {
     var mapping = {};
     $('#wc-mas-mapping-table tbody tr').each(function () {
@@ -110,6 +137,8 @@ jQuery(function ($) {
     var mapping = buildMappingJson();
     $('#wc-mas-mapping-json').val(JSON.stringify(mapping));
   });
+
+  initializeEditingMapping();
 
   $('.wc-mas-delete-mapping').on('click', function (event) {
     event.preventDefault();

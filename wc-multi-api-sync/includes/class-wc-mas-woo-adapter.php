@@ -215,12 +215,15 @@ class WC_MAS_Woo_Adapter {
 
         if ( ! empty( $mapped['categories'] ) && is_array( $mapped['categories'] ) ) {
             $existing_terms = wp_get_object_terms( $product_id, 'product_cat', array( 'fields' => 'names' ) );
-            $mapped_categories = array_values( array_unique( $mapped['categories'] ) );
+            $mapped_categories = $this->normalize_categories( $mapped['categories'] );
             sort( $existing_terms );
             sort( $mapped_categories );
             if ( $existing_terms !== $mapped_categories ) {
-                wp_set_object_terms( $product_id, $mapped['categories'], 'product_cat', false );
-                $changes['categories'] = array( 'from' => $existing_terms, 'to' => $mapped_categories );
+                $category_ids = $this->ensure_product_categories( $mapped_categories );
+                if ( ! empty( $category_ids ) ) {
+                    wp_set_object_terms( $product_id, $category_ids, 'product_cat', false );
+                    $changes['categories'] = array( 'from' => $existing_terms, 'to' => $mapped_categories );
+                }
             }
         }
 
@@ -330,7 +333,51 @@ class WC_MAS_Woo_Adapter {
         return $prefix . $title;
     }
 
-    
+
+    private function normalize_categories( $categories ) {
+        $normalized = array();
+        foreach ( $categories as $category ) {
+            if ( is_array( $category ) ) {
+                $category = $category['name'] ?? '';
+            }
+            $category = sanitize_text_field( (string) $category );
+            if ( '' === $category ) {
+                continue;
+            }
+            $normalized[] = $category;
+        }
+
+        return array_values( array_unique( $normalized ) );
+    }
+
+    private function ensure_product_categories( $categories ) {
+        $term_ids = array();
+
+        foreach ( $categories as $category_name ) {
+            $term = get_term_by( 'name', $category_name, 'product_cat' );
+            if ( ! $term ) {
+                $inserted = wp_insert_term( $category_name, 'product_cat' );
+                if ( is_wp_error( $inserted ) ) {
+                    $this->logger->warning(
+                        'Category creation failed',
+                        null,
+                        array(
+                            'category' => $category_name,
+                            'error' => $inserted->get_error_message(),
+                        )
+                    );
+                    continue;
+                }
+                $term_ids[] = (int) $inserted['term_id'];
+                continue;
+            }
+
+            $term_ids[] = (int) $term->term_id;
+        }
+
+        return array_values( array_unique( $term_ids ) );
+    }
+
     private function set_product_attributes( $product_id, $attributes ) {
         $product_attributes = array();
         foreach ( $attributes as $name => $options ) {
