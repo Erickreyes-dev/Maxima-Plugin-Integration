@@ -197,6 +197,7 @@ class WC_MAS_Admin {
             'base_url' => esc_url_raw( wp_unslash( $_POST['base_url'] ?? '' ) ),
             'products_endpoint' => sanitize_text_field( wp_unslash( $_POST['products_endpoint'] ?? '' ) ),
             'notify_endpoint' => esc_url_raw( wp_unslash( $_POST['notify_endpoint'] ?? '' ) ),
+            'notify_status' => $this->sanitize_notify_status( wp_unslash( $_POST['notify_status'] ?? 'completed' ) ),
             'auth_type' => sanitize_text_field( wp_unslash( $_POST['auth_type'] ?? 'none' ) ),
             'auth_config' => wp_json_encode( $this->maybe_encrypt_auth( $auth_config, $existing_auth ) ),
             'headers' => wp_json_encode( $headers ),
@@ -208,6 +209,18 @@ class WC_MAS_Admin {
         $provider_id = $this->db->upsert_provider( $data, $provider_id );
         WC_MAS_Sync::get_instance()->schedule_provider_sync( $this->db->get_provider( $provider_id ) );
         $this->logger->log( 'info', 'Provider saved.', $provider_id );
+    }
+
+
+    private function sanitize_notify_status( $status ) {
+        $status = sanitize_text_field( $status );
+        $allowed = array( 'completed', 'processing' );
+
+        if ( ! in_array( $status, $allowed, true ) ) {
+            return 'completed';
+        }
+
+        return $status;
     }
 
     private function handle_mapping_form() {
